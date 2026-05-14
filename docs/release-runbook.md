@@ -144,7 +144,7 @@ Output:
 target/package/release/RELEASE-NOTES.md
 ```
 
-Edit the generated checklist from `[ ]` to completed validation notes before publishing.
+Edit the generated checklist from `[ ]` to completed validation notes before upload/publish. `make release-upload-draft` intentionally does not regenerate release notes, so manual validation edits are preserved.
 
 ## Upload/update GitHub draft release
 

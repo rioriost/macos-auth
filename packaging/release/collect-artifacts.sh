@@ -89,7 +89,7 @@ copy_local_source() {
     -name '*.deb' -o \
     -name '*.rpm' -o \
     -name '*.pkg' \
-  \) -exec cp {} "$out_dir" \;
+  \) ! -name '*-signed.pkg' -exec cp {} "$out_dir" \;
 }
 
 copy_remote_source() {
@@ -97,7 +97,10 @@ copy_remote_source() {
   # scp returns non-zero when a glob has no matches. Keep each pattern optional.
   scp -q "$src"/*.deb "$out_dir"/ 2>/dev/null || true
   scp -q "$src"/*.rpm "$out_dir"/ 2>/dev/null || true
-  scp -q "$src"/*.pkg "$out_dir"/ 2>/dev/null || true
+  tmp_dir=$(mktemp -d /tmp/macos-auth-collect.XXXXXX)
+  scp -q "$src"/*.pkg "$tmp_dir"/ 2>/dev/null || true
+  find "$tmp_dir" -maxdepth 1 -type f -name '*.pkg' ! -name '*-signed.pkg' -exec cp {} "$out_dir" \;
+  rm -rf "$tmp_dir"
 }
 
 printf '%s

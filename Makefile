@@ -85,7 +85,8 @@ release-notes:
 	@if [ ! -x packaging/release/make-notes.sh ]; then echo "packaging/release/make-notes.sh is not available in this checkout" >&2; exit 1; fi
 	VERSION=$(VERSION) SOURCE_COMMIT=$(SOURCE_COMMIT) OUT_FILE="$(RELEASE_NOTES)" packaging/release/make-notes.sh
 
-release-upload-draft: release-notes
+release-upload-draft:
+	@if [ ! -f "$(RELEASE_NOTES)" ]; then echo "Release notes not found: $(RELEASE_NOTES). Run make release-notes and edit/check validation before upload." >&2; exit 1; fi
 	@if [ ! -x packaging/release/upload-draft.sh ]; then echo "packaging/release/upload-draft.sh is not available in this checkout" >&2; exit 1; fi
 	packaging/release/upload-draft.sh --repo "$(RELEASE_REPO)" --tag "$(RELEASE_TAG)" --target "$(SOURCE_COMMIT)" --title "$(RELEASE_TITLE)" --notes-file "$(RELEASE_NOTES)" --artifact-dir "$(RELEASE_DIR)"
 
