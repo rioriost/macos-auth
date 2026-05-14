@@ -1,0 +1,15 @@
+Package: macos-auth
+Version: @VERSION@
+Section: admin
+Priority: optional
+Architecture: @ARCH@
+Depends: libc6, libpam0g
+Installed-Size: @INSTALLED_SIZE@
+Maintainer: macos-auth contributors <noreply@example.invalid>
+Homepage: https://github.com/rioriost/macos-auth
+Description: Linux PAM helper for macOS-backed authentication approval
+ macos-auth is an experimental PAM module and Linux helper for approving
+ Linux authentication requests through a macOS user-session agent.
+ .
+ This package installs the Linux helper, PAM module, documentation, and
+ example PAM snippets. It does not modify /etc/pam.d/sudo automatically.

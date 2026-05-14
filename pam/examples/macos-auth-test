@@ -1,0 +1,9 @@
+#%PAM-1.0
+# Development-only PAM service for testing pam_macos_auth.so with pamtester.
+#
+# Install as /etc/pam.d/macos-auth-test after adjusting the helper/conf paths.
+# This service is safer than modifying /etc/pam.d/sudo directly.
+
+auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/local/bin/macos-auth-helper timeout_ms=25000 debug
+auth include common-auth
+account include common-account

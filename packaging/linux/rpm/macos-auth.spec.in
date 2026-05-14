@@ -1,0 +1,57 @@
+Name:           macos-auth
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Linux PAM helper for macOS-backed authentication approval
+
+License:        MIT
+URL:            https://github.com/rioriost/macos-auth
+Source0:        %{name}-%{version}.tar.gz
+
+BuildRequires:  cargo
+BuildRequires:  gcc
+BuildRequires:  make
+BuildRequires:  pam-devel
+BuildRequires:  rust
+Requires:       pam
+
+%global debug_package %{nil}
+
+%description
+macos-auth is an experimental PAM module and Linux helper for approving Linux
+authentication requests through a macOS user-session agent.
+
+This package installs the Linux helper, PAM module, documentation, and example
+PAM snippets. It does not modify /etc/pam.d/sudo automatically.
+
+%prep
+%autosetup
+
+%build
+cargo build --release --locked
+%make_build -C pam
+
+%install
+install -D -m 0755 target/release/macos-auth-helper %{buildroot}%{_bindir}/macos-auth-helper
+install -D -m 0644 pam/pam_macos_auth.so %{buildroot}%{_libdir}/security/pam_macos_auth.so
+install -D -m 0644 LICENSE %{buildroot}%{_licensedir}/%{name}/LICENSE
+install -D -m 0644 README.md %{buildroot}%{_docdir}/%{name}/README.md
+install -D -m 0644 docs/helper.md %{buildroot}%{_docdir}/%{name}/helper.md
+install -D -m 0644 docs/pam-testing.md %{buildroot}%{_docdir}/%{name}/pam-testing.md
+install -D -m 0644 pam/README.md %{buildroot}%{_docdir}/%{name}/pam.md
+install -D -m 0644 pam/examples/macos-auth-test %{buildroot}%{_datadir}/%{name}/examples/macos-auth-test
+install -D -m 0644 pam/examples/sudo-snippet %{buildroot}%{_datadir}/%{name}/examples/sudo-snippet
+
+%files
+%license %{_licensedir}/%{name}/LICENSE
+%doc %{_docdir}/%{name}/README.md
+%doc %{_docdir}/%{name}/helper.md
+%doc %{_docdir}/%{name}/pam-testing.md
+%doc %{_docdir}/%{name}/pam.md
+%{_bindir}/macos-auth-helper
+%{_libdir}/security/pam_macos_auth.so
+%{_datadir}/%{name}/examples/macos-auth-test
+%{_datadir}/%{name}/examples/sudo-snippet
+
+%changelog
+* Thu Jan 01 2026 macos-auth contributors <noreply@example.invalid> - @VERSION@-1
+- Initial package skeleton.

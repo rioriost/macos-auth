@@ -1,0 +1,4 @@
+# Development example only. Do not paste into sudo until pamtester succeeds.
+# Keep a separate root shell open before editing /etc/pam.d/sudo.
+
+auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/local/bin/macos-auth-helper

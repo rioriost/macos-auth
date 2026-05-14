@@ -1,37 +1,42 @@
-.PHONY: all build test check fmt rust-test swift-build swift-vector pam-check shell-check clean
+.PHONY: all build test check fmt rust-build rust-test pam-build pam-check shell-check package-deb package-rpm clean
 
 all: check
 
-build: swift-build
-	cargo build
-	$(MAKE) -C pam
+build: rust-build pam-build
 
-check: fmt rust-test swift-build swift-vector pam-check shell-check
+check: fmt rust-test pam-check shell-check
+
+test: rust-test
 
 fmt:
 	cargo fmt --all -- --check
 
+rust-build:
+	cargo build --locked
+
 rust-test:
-	cargo test
+	cargo test --locked
 
-swift-build:
-	swift build --package-path agent
-
-swift-vector: swift-build
-	agent/.build/debug/macos-auth-agent verify-vector --path test-vectors/v1/approval.json
+pam-build:
+	$(MAKE) -C pam
 
 pam-check:
 	$(MAKE) -C pam check
 
 shell-check:
-	sh -n scripts/install-launchagent.sh
-	sh -n scripts/macos-dev-setup.sh
+	sh -n scripts/check.sh
 	sh -n scripts/linux-dev-setup.sh
 	sh -n scripts/linux-install-dev.sh
-	sh -n scripts/uninstall-launchagent.sh
-	sh -n scripts/status-launchagent.sh
+	sh -n packaging/linux/build-deb.sh
+	sh -n packaging/linux/build-rpm.sh
+
+package-deb:
+	packaging/linux/build-deb.sh
+
+package-rpm:
+	packaging/linux/build-rpm.sh
 
 clean:
 	cargo clean
-	swift package --package-path agent clean
 	$(MAKE) -C pam clean
+	rm -rf target/package

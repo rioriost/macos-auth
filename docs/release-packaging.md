@@ -255,6 +255,7 @@ macOS cask artifact must be validated with:
 
 ## Next packaging tasks
 
-- Add Debian packaging skeleton.
-- Add RPM spec skeleton.
-- Add macOS `.pkg` build plan/script.
+- Validate `packaging/linux/build-deb.sh` on Ubuntu arm64 and a native Debian/Ubuntu amd64 builder.
+- Validate `packaging/linux/build-rpm.sh` on RHEL-family aarch64 and x86_64 builders.
+- Add release signing and checksum generation.
+- Add macOS `.pkg` build plan/script when macOS packaging sources are ready to publish.
