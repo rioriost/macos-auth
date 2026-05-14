@@ -20,7 +20,7 @@ require_command() {
 
 prepare_source() {
   label="$1"
-  src_dir="$work_dir/src-$label"
+  src_dir="$abs_work_dir/src-$label"
   rm -rf "$src_dir"
   mkdir -p "$src_dir"
   git archive "$source_ref" | tar -C "$src_dir" -xf -
@@ -70,6 +70,7 @@ esac
 rm -rf "$out_dir" "$work_dir"
 mkdir -p "$out_dir" "$work_dir"
 abs_out_dir=$(CDPATH= cd "$out_dir" && pwd)
+abs_work_dir=$(CDPATH= cd "$work_dir" && pwd)
 commit=$(git rev-parse --short=12 "$source_ref")
 
 cat > "$abs_out_dir/BUILD-METADATA.txt" <<EOF_META
