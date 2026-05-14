@@ -30,6 +30,7 @@ shell-check:
 	sh -n packaging/linux/build-deb.sh
 	sh -n packaging/linux/build-rpm.sh
 	sh -n packaging/linux/build-x86_64-containers.sh
+	sh -n packaging/linux/smoke-test-package.sh
 
 package-deb:
 	packaging/linux/build-deb.sh

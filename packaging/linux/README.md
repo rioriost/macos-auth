@@ -57,3 +57,14 @@ This builds:
 Artifacts, `SHA256SUMS`, and `BUILD-METADATA.txt` are written to `target/package/x86_64-containers/`.
 
 The script packages tracked files from the current git ref, `HEAD` by default. Set `SOURCE_REF` to build another ref.
+
+## Install/uninstall smoke test
+
+In a disposable VM or test container, run the package smoke test as root:
+
+```text
+sudo packaging/linux/smoke-test-package.sh target/package/deb/macos-auth_0.1.0_arm64.deb
+sudo packaging/linux/smoke-test-package.sh target/package/rpm/macos-auth-0.1.0-1.el9.aarch64.rpm
+```
+
+The smoke test installs the package, runs `/usr/bin/macos-auth-helper --help`, lists installed package files, and uninstalls the package. It does not modify `/etc/pam.d/sudo` and does not run `pamtester`.
