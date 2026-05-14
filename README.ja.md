@@ -241,10 +241,14 @@ sudo chmod 0644 /etc/macos-auth/config.toml /etc/macos-auth/agents.d/agent.pub
 
 この手順は **macOS** で行います。
 
-必要なら installed sample から始められます。
+必要なら installed sample を作業用ファイルにコピーし、`HostName`、`User`、Linux 側 UID、macOS 側 socket path を編集してから `~/.ssh/config` に反映します。
 
 ```text
-cp /opt/homebrew/share/macos-auth/examples/ssh-config.sample ./macos-auth-ssh-config.sample
+cp /opt/homebrew/share/macos-auth/examples/ssh-config.sample /tmp/macos-auth-ssh-config
+$EDITOR /tmp/macos-auth-ssh-config
+mkdir -p "$HOME/.ssh"
+cat /tmp/macos-auth-ssh-config >> "$HOME/.ssh/config"
+chmod 0600 "$HOME/.ssh/config"
 ```
 
 macOS の SSH config example:
