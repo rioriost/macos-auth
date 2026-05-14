@@ -9,7 +9,7 @@ NOTARY_PROFILE ?= macos-auth-notary
 MACOS_SIGNED_PKG ?= target/package/macos/macos-auth-$(VERSION)-darwin-arm64-signed.pkg
 MACOS_FINAL_PKG ?= target/package/macos/macos-auth-$(VERSION)-darwin-arm64.pkg
 
-.PHONY: all build test check fmt rust-build rust-test pam-build pam-check shell-check package-deb package-rpm package-x86_64-containers package-macos package-macos-signed notarize-macos release-notes release-upload-draft release-status clean
+.PHONY: all build test check fmt rust-build rust-test pam-build pam-check shell-check package-deb package-rpm package-x86_64-containers package-macos package-macos-signed notarize-macos release-collect release-verify release-notes release-upload-draft release-status clean
 
 all: check
 
@@ -44,6 +44,8 @@ shell-check:
 	sh -n packaging/linux/smoke-test-package.sh
 	if [ -f packaging/macos/build-pkg.sh ]; then sh -n packaging/macos/build-pkg.sh; fi
 	if [ -f packaging/macos/notarize-pkg.sh ]; then sh -n packaging/macos/notarize-pkg.sh; fi
+	if [ -f packaging/release/collect-artifacts.sh ]; then sh -n packaging/release/collect-artifacts.sh; fi
+	if [ -f packaging/release/verify-artifacts.sh ]; then sh -n packaging/release/verify-artifacts.sh; fi
 	if [ -f packaging/release/make-notes.sh ]; then sh -n packaging/release/make-notes.sh; fi
 	if [ -f packaging/release/upload-draft.sh ]; then sh -n packaging/release/upload-draft.sh; fi
 
@@ -69,6 +71,15 @@ package-macos-signed:
 notarize-macos:
 	@if [ ! -x packaging/macos/notarize-pkg.sh ]; then echo "packaging/macos/notarize-pkg.sh is not available in this checkout" >&2; exit 1; fi
 	packaging/macos/notarize-pkg.sh --pkg "$(MACOS_SIGNED_PKG)" --keychain-profile "$(NOTARY_PROFILE)" --final-pkg "$(MACOS_FINAL_PKG)" --sha256-file target/package/macos/SHA256SUMS.cask
+
+release-collect:
+	@test -n "$(RELEASE_ARTIFACT_SOURCES)" || { echo "Set RELEASE_ARTIFACT_SOURCES to local/remote artifact directories" >&2; exit 2; }
+	@if [ ! -x packaging/release/collect-artifacts.sh ]; then echo "packaging/release/collect-artifacts.sh is not available in this checkout" >&2; exit 1; fi
+	RELEASE_ARTIFACT_SOURCES="$(RELEASE_ARTIFACT_SOURCES)" packaging/release/collect-artifacts.sh --out-dir "$(RELEASE_DIR)" --version "$(VERSION)" --clean
+
+release-verify:
+	@if [ ! -x packaging/release/verify-artifacts.sh ]; then echo "packaging/release/verify-artifacts.sh is not available in this checkout" >&2; exit 1; fi
+	packaging/release/verify-artifacts.sh --artifact-dir "$(RELEASE_DIR)" --version "$(VERSION)" --require-macos
 
 release-notes:
 	@if [ ! -x packaging/release/make-notes.sh ]; then echo "packaging/release/make-notes.sh is not available in this checkout" >&2; exit 1; fi

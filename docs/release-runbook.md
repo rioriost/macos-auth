@@ -4,7 +4,9 @@ This document maps the release process to reproducible `make` targets and script
 
 ## Status
 
-The release is reproducible from scripted steps, but it is intentionally split by builder type:
+The release is reproducible from scripted steps in a full release checkout, but it is intentionally split by builder type.
+
+Important scope note: the public source subset currently does not include the macOS agent source. The macOS package targets therefore require the full local/private checkout that contains `agent/`, macOS LaunchAgent scripts, and `packaging/macos/`.
 
 - macOS package build/sign/notarize runs on the Apple Silicon Mac.
 - Linux x86_64 packages are built in clean Podman containers on an x86_64 Linux host.
@@ -109,12 +111,25 @@ Create a release directory containing:
 - `BUILD-METADATA.txt`
 - `BUILD-METADATA-darwin-arm64.txt`
 
-The exact copy/scp step depends on local builder inventory, so it is intentionally not hardcoded here. Store local inventory in `docs/build-farm.local.md` or shell aliases outside git.
+The exact builder inventory depends on local infrastructure, so private hostnames, LAN IPs, and SSH usernames are intentionally not hardcoded here. Store local inventory in `docs/build-farm.local.md`, shell aliases, or an ignored environment file.
 
-Suggested output directory:
+Use `RELEASE_ARTIFACT_SOURCES` with local directories and/or scp-compatible remote directories:
+
+```text
+RELEASE_ARTIFACT_SOURCES="target/package/x86_64-containers target/package/macos builder-alias:/path/to/arm64-artifacts" \
+  make release-collect VERSION=0.1.0
+```
+
+This writes:
 
 ```text
 target/package/release/
+```
+
+Then verify package presence and checksums:
+
+```text
+make release-verify VERSION=0.1.0
 ```
 
 ## Generate release notes
@@ -167,6 +182,24 @@ HOMEBREW_NO_AUTO_UPDATE=1 brew audit --cask rioriost/cask/macos-auth
 ```
 
 The cask install test requires the GitHub release to be published, because Homebrew cannot download assets from a draft release.
+
+## Current reproducibility boundary
+
+The following parts are now scripted:
+
+- Linux native package builds: `make package-deb` / `make package-rpm`
+- x86_64 container builds: `make package-x86_64-containers`
+- macOS package build/sign/notarize in a full local checkout: `make package-macos-signed` / `make notarize-macos`
+- artifact collection: `make release-collect`
+- artifact checksum verification: `make release-verify`
+- draft release upload/update: `make release-upload-draft`
+- release notes generation: `make release-notes`
+
+The following remain intentionally outside the public Makefile as hardcoded values:
+
+- private builder hostnames/IPs and SSH users
+- Apple credentials and Keychain item names
+- Homebrew cask repository push/publish decision
 
 ## Remaining manual gates
 
