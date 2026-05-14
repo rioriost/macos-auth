@@ -59,6 +59,8 @@ install -D -m 0644 docs/pam-testing.md "$pkgroot/usr/share/doc/macos-auth/pam-te
 install -D -m 0644 pam/README.md "$pkgroot/usr/share/doc/macos-auth/pam.md"
 install -D -m 0644 pam/examples/macos-auth-test "$pkgroot/usr/share/macos-auth/examples/macos-auth-test"
 install -D -m 0644 pam/examples/sudo-snippet "$pkgroot/usr/share/macos-auth/examples/sudo-snippet"
+install -D -m 0644 packaging/linux/examples/config.toml.sample "$pkgroot/usr/share/macos-auth/examples/config.toml.sample"
+install -D -m 0644 packaging/linux/examples/ssh-config.sample "$pkgroot/usr/share/macos-auth/examples/ssh-config.sample"
 
 installed_size=$(du -sk "$pkgroot/usr" | awk '{print $1}')
 sed \

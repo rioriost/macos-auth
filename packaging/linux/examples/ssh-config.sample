@@ -1,0 +1,9 @@
+# macOS ~/.ssh/config sample for forwarding the macOS agent socket to Linux.
+# This file is installed with the Linux package for documentation only; use it on macOS.
+
+Host linux-with-macos-auth
+    HostName linux.example.com
+    User alice
+    RemoteForward /run/user/1000/macos-auth-agent.sock /Users/alice/Library/Application Support/macos-auth/agent.sock
+    StreamLocalBindUnlink yes
+    ExitOnForwardFailure yes

@@ -20,6 +20,8 @@ Linux packages should contain:
 - `macos-auth-helper`
 - `pam_macos_auth.so`
 - documentation and examples
+- `/usr/share/macos-auth/examples/config.toml.sample`
+- `/usr/share/macos-auth/examples/ssh-config.sample`
 
 Linux packages must not automatically modify `/etc/pam.d/sudo`.
 

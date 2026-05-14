@@ -1,15 +1,15 @@
-# macos-auth Linux packaging subset
+# macos-auth
 
-`macos-auth` is an experimental PAM module plus helper for approving Linux authentication requests through a macOS user-session agent.
+`macos-auth` is an experimental PAM module, Linux helper, and macOS user-session agent for approving Linux authentication requests from a Mac.
 
-This public repository currently contains the Linux build and packaging subset needed to build Debian/Ubuntu `.deb` packages and Fedora/RHEL-family `.rpm` packages:
+This public repository contains the Linux build and packaging subset, release packaging documentation, and user-facing setup notes. The macOS agent package is distributed as a signed/notarized release asset and Homebrew cask; the macOS agent source is not part of this public source subset yet.
+
+Public Linux-side contents include:
 
 - Rust protocol and Linux helper crates
 - C PAM shim
 - Linux package build scripts and package metadata
 - Linux testing and packaging documentation
-
-The macOS agent implementation and local build-farm inventory are intentionally not published here.
 
 > **Status:** development-only. Do not use this as a production authentication mechanism yet.
 
@@ -53,11 +53,12 @@ The Linux package provides:
 - `pam_macos_auth.so`
 - documentation and PAM examples
 
-The macOS package/cask provides:
+The macOS package/cask follows the Apple Silicon Homebrew prefix and provides:
 
-- `/opt/macos-auth/bin/macos-auth-agent`
-- LaunchAgent helper scripts under `/opt/macos-auth/share/macos-auth/scripts/`
+- `/opt/homebrew/bin/macos-auth-agent`
+- LaunchAgent helper scripts under `/opt/homebrew/share/macos-auth/scripts/`
 - a LaunchAgent plist template
+- sample config files under `/opt/homebrew/share/macos-auth/examples/`
 
 Runtime state is intentionally user-controlled:
 
@@ -66,6 +67,8 @@ Runtime state is intentionally user-controlled:
 - Linux helper config: `/etc/macos-auth/config.toml`
 - Linux host private key: `/etc/macos-auth/host_ed25519.key`
 - pinned macOS agent public key: `/etc/macos-auth/agents.d/*.pub`
+- macOS samples: `/opt/homebrew/share/macos-auth/examples/agent-config.json.example` and `/opt/homebrew/share/macos-auth/examples/ssh-config.sample`
+- Linux samples: `/usr/share/macos-auth/examples/config.toml.sample` and `/usr/share/macos-auth/examples/ssh-config.sample`
 
 ## How it works
 
@@ -106,30 +109,30 @@ Trust model summary:
 
 ## How to install
 
-### 1. Install the macOS agent
+### 1. Install the macOS agent `[macOS]`
 
-When the Homebrew cask is available:
+Run this on **macOS**. When the Homebrew cask is available:
 
 ```text
 brew install --cask rioriost/cask/macos-auth
 ```
 
-The cask installs files under `/opt/macos-auth`; it does **not** automatically create keys, host allowlists, or a LaunchAgent.
+The cask installs files under `/opt/homebrew`; it does **not** automatically create keys, host allowlists, or a LaunchAgent.
 
 Prepare an agent key and config, then install the per-user LaunchAgent explicitly. The exact host allowlist setup depends on the Linux host key generated in the next step.
 
 Useful installed commands:
 
 ```text
-/opt/macos-auth/bin/macos-auth-agent --help
-/opt/macos-auth/share/macos-auth/scripts/install-launchagent.sh --help
-/opt/macos-auth/share/macos-auth/scripts/status-launchagent.sh
-/opt/macos-auth/share/macos-auth/scripts/uninstall-launchagent.sh --help
+/opt/homebrew/bin/macos-auth-agent --help
+/opt/homebrew/share/macos-auth/scripts/install-launchagent.sh --help
+/opt/homebrew/share/macos-auth/scripts/status-launchagent.sh
+/opt/homebrew/share/macos-auth/scripts/uninstall-launchagent.sh --help
 ```
 
-### 2. Install the Linux package
+### 2. Install the Linux package `[Linux]`
 
-Download the package matching your Linux distribution family and architecture from the release assets.
+Run this on **Linux**. Download the package matching your Linux distribution family and architecture from the release assets.
 
 Ubuntu/Debian example:
 
@@ -145,9 +148,9 @@ sudo rpm -Uvh macos-auth-0.1.0-1.rhel9.aarch64.rpm
 
 Packages install the helper and PAM module, but they do **not** modify `/etc/pam.d/sudo`.
 
-### 3. Pair the Mac and Linux host
+### 3. Pair the Mac and Linux host `[macOS + Linux]`
 
-Generate a Linux host key on Linux:
+Run this on **Linux** to generate a Linux host key:
 
 ```text
 sudo mkdir -p /etc/macos-auth/agents.d
@@ -156,14 +159,14 @@ sudo /usr/bin/macos-auth-helper gen-key \
   --public-key-file /etc/macos-auth/host_ed25519.pub
 ```
 
-Initialize a macOS agent key on the Mac:
+Run this on **macOS** to initialize a macOS agent key:
 
 ```text
-/opt/macos-auth/bin/macos-auth-agent keychain-init \
+/opt/homebrew/bin/macos-auth-agent keychain-init \
   --service com.macos-auth.agent \
   --account default
 
-/opt/macos-auth/bin/macos-auth-agent keychain-public-key \
+/opt/homebrew/bin/macos-auth-agent keychain-public-key \
   --service com.macos-auth.agent \
   --account default > agent.pub
 ```
@@ -172,6 +175,13 @@ Copy public keys to the opposite side:
 
 - copy the Linux host public key, `/etc/macos-auth/host_ed25519.pub`, to the Mac host allowlist
 - copy the macOS agent public key, `agent.pub`, to Linux as `/etc/macos-auth/agents.d/agent.pub`
+
+On **macOS**, start from the installed sample if you prefer:
+
+```text
+cp /opt/homebrew/share/macos-auth/examples/agent-config.json.example \
+  "$HOME/Library/Application Support/macos-auth/agent-config.json"
+```
 
 Example macOS agent config:
 
@@ -196,7 +206,13 @@ Example macOS agent config:
 
 Save it as `$HOME/Library/Application Support/macos-auth/agent-config.json` and make sure the `hosts` entry points at the copied Linux host public key.
 
-### 4. Configure the Linux helper
+### 4. Configure the Linux helper `[Linux]`
+
+Run this on **Linux**. Start from the installed sample if you prefer:
+
+```text
+sudo cp /usr/share/macos-auth/examples/config.toml.sample /etc/macos-auth/config.toml
+```
 
 Create `/etc/macos-auth/config.toml` with:
 
@@ -223,6 +239,14 @@ sudo chmod 0644 /etc/macos-auth/config.toml /etc/macos-auth/agents.d/agent.pub
 
 ### 5. Configure SSH RemoteForward
 
+This step is performed on **macOS**.
+
+Start from the installed sample if you prefer:
+
+```text
+cp /opt/homebrew/share/macos-auth/examples/ssh-config.sample ./macos-auth-ssh-config.sample
+```
+
 Example SSH config on macOS:
 
 ```text
@@ -238,37 +262,39 @@ Adjust `/run/user/1000` to the Linux user's UID and the macOS socket path to you
 
 ## How to use
 
-### 1. Start the macOS agent
+### 1. Start the macOS agent `[macOS]`
 
-If using the LaunchAgent helper:
+If using the LaunchAgent helper, run this on **macOS**:
 
 ```text
-/opt/macos-auth/share/macos-auth/scripts/install-launchagent.sh \
-  --agent-bin /opt/macos-auth/bin/macos-auth-agent \
+/opt/homebrew/share/macos-auth/scripts/install-launchagent.sh \
+  --agent-bin /opt/homebrew/bin/macos-auth-agent \
   --config "$HOME/Library/Application Support/macos-auth/agent-config.json"
 ```
 
 Check status:
 
 ```text
-/opt/macos-auth/share/macos-auth/scripts/status-launchagent.sh
+/opt/homebrew/share/macos-auth/scripts/status-launchagent.sh
 ```
 
-### 2. Open SSH with RemoteForward
+### 2. Open SSH with RemoteForward `[macOS]`
+
+Run SSH from **macOS** using the host entry that contains `RemoteForward`:
 
 ```text
 ssh linux-with-macos-auth
 ```
 
-Inside the Linux session, confirm the forwarded socket exists:
+Then, inside the resulting **Linux** session, confirm the forwarded socket exists:
 
 ```text
 ls -l /run/user/$(id -u)/macos-auth-agent.sock
 ```
 
-### 3. Test the helper directly
+### 3. Test the helper directly `[Linux]`
 
-Before using PAM, test the helper:
+Before using PAM, run this on **Linux**:
 
 ```text
 /usr/bin/macos-auth-helper request \
@@ -290,9 +316,9 @@ Expected exits:
 | `31` | unsafe config | hard fail |
 | `32` | protocol error | hard fail |
 
-### 4. Test PAM without touching sudo
+### 4. Test PAM without touching sudo `[Linux]`
 
-Do **not** edit `/etc/pam.d/sudo` first.
+Do **not** edit `/etc/pam.d/sudo` first. Run this on **Linux**.
 
 Create a test service and use `pamtester`; see `docs/pam-testing.md` for distro-specific details.
 
@@ -302,9 +328,9 @@ Recommended control syntax:
 auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/bin/macos-auth-helper timeout_ms=25000 debug
 ```
 
-### 5. Enable sudo only after pamtester succeeds
+### 5. Enable sudo only after pamtester succeeds `[Linux]`
 
-Only after the test service works, add the `pam_macos_auth.so` line near the top of `/etc/pam.d/sudo`, keeping normal password authentication below it.
+Only after the test service works, edit `/etc/pam.d/sudo` on **Linux** and add the `pam_macos_auth.so` line near the top, keeping normal password authentication below it.
 
 Always keep a separate root shell open while editing PAM.
 
@@ -405,6 +431,8 @@ Linux packages install:
 - `pam_macos_auth.so` in the distro PAM module directory
 - package documentation under `/usr/share/doc/macos-auth/`
 - PAM examples under `/usr/share/macos-auth/examples/`
+- sample Linux config: `/usr/share/macos-auth/examples/config.toml.sample`
+- sample SSH config: `/usr/share/macos-auth/examples/ssh-config.sample`
 
 Packages must not automatically modify `/etc/pam.d/sudo`.
 

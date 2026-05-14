@@ -34,6 +34,7 @@ mkdir -p "$topdir/BUILD" "$topdir/BUILDROOT" "$topdir/RPMS" "$topdir/SOURCES" "$
 cp Cargo.toml Cargo.lock LICENSE README.md "$source_root/"
 cp -R crates "$source_root/crates"
 cp -R pam "$source_root/pam"
+cp -R packaging "$source_root/packaging"
 mkdir -p "$source_root/docs"
 cp docs/helper.md docs/pam-testing.md "$source_root/docs/"
 

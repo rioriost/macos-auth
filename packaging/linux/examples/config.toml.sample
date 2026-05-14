@@ -1,0 +1,12 @@
+# macos-auth Linux helper configuration sample.
+# Install as /etc/macos-auth/config.toml after adapting paths and IDs.
+
+socket_path = "/run/user/1000/macos-auth-agent.sock"
+host_key_file = "/etc/macos-auth/host_ed25519.key"
+agent_pubkey_file = "/etc/macos-auth/agents.d/agent.pub"
+key_id = "host-key-1"
+host_id = "linux-host-id"
+hostname = "linux.example.com"
+service = "sudo"
+timeout_ms = 15000
+allowed_future_skew_ms = 30000

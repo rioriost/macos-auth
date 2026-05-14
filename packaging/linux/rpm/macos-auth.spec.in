@@ -40,6 +40,8 @@ install -D -m 0644 docs/pam-testing.md %{buildroot}%{_docdir}/%{name}/pam-testin
 install -D -m 0644 pam/README.md %{buildroot}%{_docdir}/%{name}/pam.md
 install -D -m 0644 pam/examples/macos-auth-test %{buildroot}%{_datadir}/%{name}/examples/macos-auth-test
 install -D -m 0644 pam/examples/sudo-snippet %{buildroot}%{_datadir}/%{name}/examples/sudo-snippet
+install -D -m 0644 packaging/linux/examples/config.toml.sample %{buildroot}%{_datadir}/%{name}/examples/config.toml.sample
+install -D -m 0644 packaging/linux/examples/ssh-config.sample %{buildroot}%{_datadir}/%{name}/examples/ssh-config.sample
 
 %files
 %license %{_licensedir}/%{name}/LICENSE
@@ -51,6 +53,8 @@ install -D -m 0644 pam/examples/sudo-snippet %{buildroot}%{_datadir}/%{name}/exa
 %{_libdir}/security/pam_macos_auth.so
 %{_datadir}/%{name}/examples/macos-auth-test
 %{_datadir}/%{name}/examples/sudo-snippet
+%{_datadir}/%{name}/examples/config.toml.sample
+%{_datadir}/%{name}/examples/ssh-config.sample
 
 %changelog
 * Thu Jan 01 2026 macos-auth contributors <noreply@example.invalid> - @VERSION@-1
