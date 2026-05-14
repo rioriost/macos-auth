@@ -38,3 +38,22 @@ packaging/linux/build-rpm.sh
 ```
 
 Both scripts build from the local source tree and write artifacts under `target/package/`.
+
+## x86_64 containerized build
+
+On an x86_64 host with Podman, build all current x86_64 Linux package targets in clean containers:
+
+```text
+packaging/linux/build-x86_64-containers.sh
+```
+
+This builds:
+
+- Ubuntu 24.04 `amd64` `.deb`
+- Ubuntu 25.10 `amd64` `.deb`
+- RHEL 9-family `x86_64` `.rpm` using UBI 9.7
+- RHEL 10-family `x86_64` `.rpm` using UBI 10.1
+
+Artifacts, `SHA256SUMS`, and `BUILD-METADATA.txt` are written to `target/package/x86_64-containers/`.
+
+The script packages tracked files from the current git ref, `HEAD` by default. Set `SOURCE_REF` to build another ref.

@@ -1,4 +1,4 @@
-.PHONY: all build test check fmt rust-build rust-test pam-build pam-check shell-check package-deb package-rpm clean
+.PHONY: all build test check fmt rust-build rust-test pam-build pam-check shell-check package-deb package-rpm package-x86_64-containers clean
 
 all: check
 
@@ -29,12 +29,16 @@ shell-check:
 	sh -n scripts/linux-install-dev.sh
 	sh -n packaging/linux/build-deb.sh
 	sh -n packaging/linux/build-rpm.sh
+	sh -n packaging/linux/build-x86_64-containers.sh
 
 package-deb:
 	packaging/linux/build-deb.sh
 
 package-rpm:
 	packaging/linux/build-rpm.sh
+
+package-x86_64-containers:
+	packaging/linux/build-x86_64-containers.sh
 
 clean:
 	cargo clean

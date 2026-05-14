@@ -224,14 +224,20 @@ Open question:
 
 ## Release artifact naming
 
-Suggested artifact names:
+Suggested release artifact names:
 
 ```text
-macos-auth-linux-amd64.deb
-macos-auth-linux-arm64.deb
-macos-auth-linux-x86_64.rpm
-macos-auth-linux-aarch64.rpm
+macos-auth_0.1.0_ubuntu24.04_amd64.deb
+macos-auth_0.1.0_ubuntu25.10_amd64.deb
+macos-auth_0.1.0_ubuntu24.04_arm64.deb
+macos-auth_0.1.0_ubuntu25.10_arm64.deb
+macos-auth-0.1.0-1.rhel9.x86_64.rpm
+macos-auth-0.1.0-1.rhel10.x86_64.rpm
+macos-auth-0.1.0-1.rhel9.aarch64.rpm
+macos-auth-0.1.0-1.rhel10.aarch64.rpm
 macos-auth-darwin-arm64.pkg
+SHA256SUMS
+BUILD-METADATA.txt
 ```
 
 ## Validation before release
@@ -257,5 +263,5 @@ macOS cask artifact must be validated with:
 
 - Validate `packaging/linux/build-deb.sh` on Ubuntu arm64 and a native Debian/Ubuntu amd64 builder.
 - Validate `packaging/linux/build-rpm.sh` on RHEL-family aarch64 and x86_64 builders.
-- Add release signing and checksum generation.
+- Add release signing. Checksum generation is implemented for x86_64 containerized Linux builds.
 - Add macOS `.pkg` build plan/script when macOS packaging sources are ready to publish.
