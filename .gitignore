@@ -1,0 +1,118 @@
+# macos-auth generated/runtime state
+/etc/macos-auth/
+
+# Local-only build farm inventory. Keep hostnames, LAN IPs, usernames,
+# SSH details, signing keys, and other private infrastructure data out of git.
+/docs/build-farm.local.md
+*.key
+*.pem
+*.der
+*.p12
+*.mobileprovision
+*.provisionprofile
+*.signature
+*.sig
+*.sock
+*.pid
+*.log
+*.local
+*.local.*
+.env
+.env.*
+!.env.example
+
+# Rust
+/target/
+**/target/
+*.rs.bk
+
+# C / PAM build outputs
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.gcda
+*.gcno
+*.gcov
+compile_commands.json
+.ccls-cache/
+.cache/
+build/
+dist/
+
+# Swift / Xcode / SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+DerivedData/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.dSYM/
+*.ipa
+*.app
+
+# Packaging
+*.deb
+*.rpm
+*.pkg
+*.tar.gz
+*.tgz
+*.zip
+*.zst
+*.xz
+*.changes
+*.buildinfo
+*.dsc
+*.spec.tmp
+
+# Fuzzing artifacts
+fuzz/artifacts/
+fuzz/corpus/
+fuzz/coverage/
+
+# Test and coverage artifacts
+coverage/
+coverage-*.json
+lcov.info
+.profraw
+.profdata
+junit.xml
+.tap
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# macOS filesystem metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux filesystem metadata
+.directory
+.Trash-*/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+*.rej
