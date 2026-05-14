@@ -462,6 +462,7 @@ This means:
 | Document | Purpose |
 |---|---|
 | `docs/release-packaging.md` | Release packaging plan for Linux and macOS artifacts |
+| `docs/release-runbook.md` | Reproducible release targets and release checklist |
 | `docs/build-farm.md` | Local/native build farm policy and builder roles |
 | `docs/linux-vm-test-plan.md` | Manual Parallels VM test plan for Ubuntu/Debian and Fedora/RHEL |
 | `docs/pam-testing.md` | PAM testing guide |
