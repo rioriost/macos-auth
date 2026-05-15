@@ -198,13 +198,13 @@ Example macOS agent config:
   "agent_keychain_account": "default",
   "agent_key_id": "agent-key-1",
   "allowed_future_skew_ms": 30000,
-  "require_confirmation": true,
+  "require_confirmation": false,
   "rate_limit_window_seconds": 60,
   "rate_limit_max_requests": 5
 }
 ```
 
-Save it as `$HOME/Library/Application Support/macos-auth/agent-config.json` and make sure the `hosts` entry points at the copied Linux host public key.
+Save it as `$HOME/Library/Application Support/macos-auth/agent-config.json` and make sure the `hosts` entry points at the copied Linux host public key. The sample uses `require_confirmation=false` so the normal flow has a single LocalAuthentication prompt; set it to `true` only if you want an additional pre-confirmation dialog before Touch ID / Apple Watch.
 
 ### 4. Configure the Linux helper `[Linux]`
 
@@ -337,6 +337,78 @@ auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/
 Only after the test service works, edit `/etc/pam.d/sudo` on **Linux** and add the `pam_macos_auth.so` line near the top, keeping normal password authentication below it.
 
 Always keep a separate root shell open while editing PAM.
+
+## Troubleshooting
+
+### `agent unavailable: failed to connect to /run/user/.../macos-auth-agent.sock`
+
+This means the Linux helper could not find the SSH-forwarded Unix socket on the Linux side.
+
+The macOS agent may still be running correctly. The most common cause is that the SSH `RemoteForward` connection is gone, so this Linux-side socket no longer exists:
+
+```text
+/run/user/1000/macos-auth-agent.sock
+```
+
+Common reasons:
+
+- the SSH session that created `RemoteForward` ended
+- the Mac went to sleep
+- the network changed or disconnected
+- the background `ssh -fN ...` process exited
+- the Linux user runtime directory under `/run/user/<uid>` was cleaned up
+- the Linux SSH server refused remote forwarding
+
+Check on **macOS** that the agent is running:
+
+```text
+/opt/homebrew/share/macos-auth/scripts/status-launchagent.sh
+ls -l "$HOME/Library/Application Support/macos-auth/agent.sock"
+```
+
+Check on **Linux** whether the forwarded socket exists:
+
+```text
+ls -l /run/user/$(id -u)/macos-auth-agent.sock
+```
+
+To recreate the forwarding connection from **macOS**, run either an interactive SSH session:
+
+```text
+ssh linux-with-macos-auth
+```
+
+or a background tunnel:
+
+```text
+ssh -fN linux-with-macos-auth
+```
+
+Then re-check on **Linux**:
+
+```text
+ls -l /run/user/$(id -u)/macos-auth-agent.sock
+```
+
+If forwarding is refused, check the Linux SSH server configuration. It must allow remote forwarding and stream-local forwarding for the user. For example:
+
+```text
+Match User alice
+    AllowTcpForwarding remote
+    AllowStreamLocalForwarding yes
+    StreamLocalBindUnlink yes
+```
+
+Reload `sshd` after changing server configuration.
+
+### `sudo -n` fails with `a password is required`
+
+This is expected. `sudo -n` means non-interactive mode, so sudo may fail immediately instead of entering the PAM approval flow. Test with a normal TTY-backed command instead:
+
+```text
+sudo -k
+sudo true
+```
 
 ## Components in this repository
 

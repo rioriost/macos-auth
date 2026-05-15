@@ -198,13 +198,13 @@ macOS agent config example:
   "agent_keychain_account": "default",
   "agent_key_id": "agent-key-1",
   "allowed_future_skew_ms": 30000,
-  "require_confirmation": true,
+  "require_confirmation": false,
   "rate_limit_window_seconds": 60,
   "rate_limit_max_requests": 5
 }
 ```
 
-`$HOME/Library/Application Support/macos-auth/agent-config.json` として保存し、`hosts` entry が copy 済みの Linux host public key を指すようにしてください。
+`$HOME/Library/Application Support/macos-auth/agent-config.json` として保存し、`hosts` entry が copy 済みの Linux host public key を指すようにしてください。sample では `require_confirmation=false` にしているため、通常の flow では LocalAuthentication prompt 1 回だけが表示されます。Touch ID / Apple Watch の前に追加の事前確認 dialog を出したい場合のみ `true` にしてください。
 
 ### 4. Linux helper を設定する `[Linux]`
 
@@ -337,6 +337,78 @@ auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/
 テスト用 service が動作した後でのみ、**Linux** の `/etc/pam.d/sudo` を編集し、通常の password authentication より上の方に `pam_macos_auth.so` 行を追加します。
 
 PAM を編集している間は、必ず別の root shell を開いたままにしてください。
+
+## トラブルシュート
+
+### `agent unavailable: failed to connect to /run/user/.../macos-auth-agent.sock`
+
+これは、Linux helper が Linux 側の SSH-forwarded Unix socket を見つけられなかったという意味です。
+
+macOS agent 自体は正常に動作している場合があります。最も多い原因は、SSH `RemoteForward` の connection が切れていて、Linux 側の socket が存在しなくなっていることです。
+
+```text
+/run/user/1000/macos-auth-agent.sock
+```
+
+よくある理由:
+
+- `RemoteForward` を作成した SSH session が終了した
+- Mac が sleep した
+- network が切り替わった、または切断された
+- background の `ssh -fN ...` process が終了した
+- Linux 側の `/run/user/<uid>` runtime directory が cleanup された
+- Linux SSH server が remote forwarding を拒否した
+
+**macOS** で agent が動いているか確認します。
+
+```text
+/opt/homebrew/share/macos-auth/scripts/status-launchagent.sh
+ls -l "$HOME/Library/Application Support/macos-auth/agent.sock"
+```
+
+**Linux** で forwarded socket が存在するか確認します。
+
+```text
+ls -l /run/user/$(id -u)/macos-auth-agent.sock
+```
+
+forwarding connection を作り直すには、**macOS** から interactive SSH session を開きます。
+
+```text
+ssh linux-with-macos-auth
+```
+
+または background tunnel を張ります。
+
+```text
+ssh -fN linux-with-macos-auth
+```
+
+その後、**Linux** 側でもう一度確認します。
+
+```text
+ls -l /run/user/$(id -u)/macos-auth-agent.sock
+```
+
+forwarding が拒否される場合は、Linux SSH server configuration を確認してください。対象 user に対して remote forwarding と stream-local forwarding が許可されている必要があります。例:
+
+```text
+Match User alice
+    AllowTcpForwarding remote
+    AllowStreamLocalForwarding yes
+    StreamLocalBindUnlink yes
+```
+
+server configuration を変更したら `sshd` を reload してください。
+
+### `sudo -n` が `a password is required` で失敗する
+
+これは想定内です。`sudo -n` は non-interactive mode なので、sudo が PAM approval flow に入らず即失敗することがあります。通常の TTY 付き command でテストしてください。
+
+```text
+sudo -k
+sudo true
+```
 
 ## この repository に含まれる components
 
