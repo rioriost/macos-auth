@@ -19,6 +19,7 @@
 *.local.*
 .env
 .env.*
+.envrc
 !.env.example
 
 # Rust

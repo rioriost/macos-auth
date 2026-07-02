@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.macos-auth.agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__MACOS_AUTH_AGENT_BIN__</string>
+        <string>serve</string>
+        <string>--config</string>
+        <string>__MACOS_AUTH_AGENT_CONFIG__</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>__MACOS_AUTH_LOG_DIR__/agent.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__MACOS_AUTH_LOG_DIR__/agent.stderr.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

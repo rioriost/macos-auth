@@ -1,0 +1,27 @@
+[package]
+name = "macos-auth-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+macos-auth-protocol = { path = "../crates/protocol" }
+serde_json = "1.0"
+
+[[bin]]
+name = "signed_response_json"
+path = "fuzz_targets/signed_response_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "signed_request_json"
+path = "fuzz_targets/signed_request_json.rs"
+test = false
+doc = false
+bench = false

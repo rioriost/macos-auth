@@ -1,0 +1,16 @@
+{
+  "socket_path": "/Users/YOUR_MAC_USER/Library/Application Support/macos-auth/agent.sock",
+  "hosts": [
+    {
+      "host_id": "linux-host-id",
+      "public_key_file": "/Users/YOUR_MAC_USER/Library/Application Support/macos-auth/hosts/linux-host-id.pub"
+    }
+  ],
+  "agent_keychain_service": "com.macos-auth.agent",
+  "agent_keychain_account": "default",
+  "agent_key_id": "agent-key-1",
+  "allowed_future_skew_ms": 30000,
+  "require_confirmation": false,
+  "rate_limit_window_seconds": 60,
+  "rate_limit_max_requests": 5
+}

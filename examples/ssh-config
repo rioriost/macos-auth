@@ -1,0 +1,6 @@
+Host linux-with-macos-auth
+    HostName linux.example.com
+    User alice
+    RemoteForward /run/user/1000/macos-auth-agent.sock /Users/YOUR_MAC_USER/Library/Application Support/macos-auth/agent.sock
+    StreamLocalBindUnlink yes
+    ExitOnForwardFailure yes
