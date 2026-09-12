@@ -1,4 +1,4 @@
-VERSION ?= 0.1.0
+VERSION ?= 0.1.1
 RELEASE_TAG ?= v$(VERSION)
 RELEASE_REPO ?= rioriost/macos-auth
 RELEASE_TITLE ?= macos-auth v$(VERSION) packages

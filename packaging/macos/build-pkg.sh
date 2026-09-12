@@ -13,7 +13,7 @@ Usage:
 Builds a macOS arm64 .pkg for the macos-auth agent.
 
 Options:
-  --version VERSION          Default: 0.1.0
+  --version VERSION          Default: 0.1.1
   --out-dir PATH             Default: target/package/macos
   --prefix PATH              Default: /opt/homebrew
   --skip-build               Use existing Swift build output
@@ -27,7 +27,7 @@ Environment alternatives:
 USAGE
 }
 
-version="0.1.0"
+version="0.1.1"
 out_dir="target/package/macos"
 prefix="/opt/homebrew"
 skip_build=0
