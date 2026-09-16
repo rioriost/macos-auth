@@ -31,6 +31,17 @@ Arch Linux testing is deferred and is not part of the current VM plan.
 - Ensure you have VM console access through Parallels Desktop.
 - Do not test first on a machine you cannot recover.
 
+## Automated PAM smoke tests in a disposable container
+
+After installing Rust, a C compiler, Linux PAM headers, Python 3, and `pamtester`,
+run `make check` and `make pam-e2e` in a root-owned checkout inside a disposable
+Podman Linux container. The latter explicitly refuses non-container execution.
+It creates a temporary PAM service, never edits `sudo`, and covers approval,
+password fallback, rejection, timeout, invalid responses, and unsafe key ownership.
+
+These tests exercise real Linux PAM dispatch but do not replace the VM/TTY/SSH
+and distro-specific `sudo` cases below.
+
 ## Parallels VM setup
 
 Recommended baseline:
@@ -316,7 +327,7 @@ If `common-auth` does not exist, create a Fedora-specific test service:
 ```text
 sudo tee /etc/pam.d/macos-auth-test >/dev/null <<'EOF'
 #%PAM-1.0
-auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/local/bin/macos-auth-helper timeout_ms=25000 debug
+auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/bin/macos-auth-helper timeout_ms=25000 debug
 auth include system-auth
 account include system-auth
 EOF
@@ -347,7 +358,7 @@ sudoedit /etc/pam.d/sudo
 Add near the top:
 
 ```text
-auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/local/bin/macos-auth-helper timeout_ms=25000
+auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/bin/macos-auth-helper timeout_ms=25000
 ```
 
 Test:
@@ -420,7 +431,7 @@ sudo rm -f /etc/pam.d/macos-auth-test
 ### Remove installed artifacts
 
 ```text
-sudo rm -f /usr/local/bin/macos-auth-helper
+sudo rm -f /usr/bin/macos-auth-helper
 sudo rm -rf /etc/macos-auth
 ```
 

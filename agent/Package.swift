@@ -13,6 +13,10 @@ let package = Package(
         .executableTarget(
             name: "MacosAuthAgent",
             dependencies: []
+        ),
+        .testTarget(
+            name: "MacosAuthAgentTests",
+            dependencies: ["MacosAuthAgent"]
         )
     ]
 )

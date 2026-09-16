@@ -25,6 +25,22 @@ cargo build
 make -C pam
 ```
 
+## Noninteractive regression tests (no root or PAM edits)
+
+```text
+cargo fmt --all -- --check
+cargo test --workspace --locked
+make -C pam test
+```
+
+The C unit harness tests exit mapping, ownership/mode/path validators, fd-based
+execution, sanitized environment, inherited descriptors above 1023, timeout
+termination/reaping, and clock failures. It never opens a live PAM service.
+On Linux it exercises real `fexecve` and descriptor cleanup. macOS cannot
+execute a validated fd: its harness uses a test-only fd-to-path adapter for the
+child fixture; the compiled PAM module itself fails closed on macOS. Linux
+tests and manual VM `pamtester` validation remain necessary before deployment.
+
 ## Prepare development config
 
 Use the local development setup script first:
@@ -55,13 +71,14 @@ sudo scripts/linux-install-dev.sh \
   --dev-dir ./macos-auth-linux-dev \
   --helper-bin target/debug/macos-auth-helper \
   --pam-module pam/pam_macos_auth.so \
+  --socket-path /run/macos-auth/agent.sock \
   --install-pamtester-service \
   --force
 ```
 
 This installs:
 
-- `/usr/local/bin/macos-auth-helper`
+- `/usr/bin/macos-auth-helper`
 - `pam_macos_auth.so` into the detected PAM module directory
 - `/etc/macos-auth/config.toml`
 - `/etc/macos-auth/host_ed25519.key`
@@ -70,15 +87,25 @@ This installs:
 
 It does **not** modify `/etc/pam.d/sudo`.
 
+The installer parses the development TOML and copies the keys it actually
+references. It generates the installed config with `/etc/macos-auth` key paths
+and the supplied absolute socket path, retaining other options. An existing
+replay-cache setting is relocated to `/var/lib/macos-auth/replay`. Installed
+config does not reference the development directory. Arrange SSH forwarding
+to the installed socket location separately; the installer does not start it.
+The development CLI permits user-owned files; PAM never does.
+
 ## Test helper directly
 
-Before PAM, verify the helper path works:
+Before PAM, verify the helper path works from a privileged test shell (the host
+private key is root-owned mode `0600`). Supply the intended target user, not the
+privileged shell's user:
 
 ```text
-/usr/local/bin/macos-auth-helper request \
+/usr/bin/macos-auth-helper request --require-root-owned \
   --config /etc/macos-auth/config.toml \
-  --user "$USER" \
-  --ruser "$USER" \
+  --user alice \
+  --ruser alice \
   --tty "$(tty | sed 's|^/dev/||')"
 ```
 
@@ -113,7 +140,7 @@ Expected behavior:
 Add this line near the top of `/etc/pam.d/sudo`, adapting paths if needed:
 
 ```text
-auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/local/bin/macos-auth-helper
+auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/bin/macos-auth-helper
 ```
 
 Keep the existing password auth lines below it.
@@ -128,7 +155,7 @@ sudo true
 ## Remove development install
 
 ```text
-sudo rm -f /usr/local/bin/macos-auth-helper
+sudo rm -f /usr/bin/macos-auth-helper
 sudo rm -f /etc/pam.d/macos-auth-test
 sudo rm -rf /etc/macos-auth
 ```

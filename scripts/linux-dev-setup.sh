@@ -76,6 +76,8 @@ if [ -z "$host_id" ] || [ -z "$hostname" ] || [ -z "$agent_pubkey_file" ]; then
   exit 2
 fi
 
+invoking_user=$(id -un)
+
 if [ ! -x "$helper_bin" ]; then
   echo "helper binary is not executable: $helper_bin" >&2
   echo "Run cargo build first or pass --helper-bin." >&2
@@ -87,10 +89,6 @@ if [ ! -f "$agent_pubkey_file" ]; then
   exit 1
 fi
 
-if [ -z "$socket_path" ]; then
-  socket_path="$out_dir/agent.sock"
-fi
-
 if [ -e "$out_dir" ] && [ "$force" -ne 1 ]; then
   echo "output directory already exists: $out_dir" >&2
   echo "Use --force to overwrite generated files." >&2
@@ -98,6 +96,14 @@ if [ -e "$out_dir" ] && [ "$force" -ne 1 ]; then
 fi
 
 mkdir -p "$out_dir/agents.d"
+out_dir=$(CDPATH='' cd -- "$out_dir" && pwd -P)
+if [ -z "$socket_path" ]; then
+  socket_path="$out_dir/agent.sock"
+fi
+case "$socket_path" in
+  /*) ;;
+  *) echo "--socket-path must be absolute" >&2; exit 2 ;;
+esac
 
 host_key_file="$out_dir/host_ed25519.key"
 host_pubkey_file="$out_dir/host_ed25519.pub"
@@ -115,17 +121,12 @@ fi
 cp "$agent_pubkey_file" "$agent_pubkey_dest"
 chmod 0644 "$agent_pubkey_dest"
 
-cat > "$config_file" <<EOF
-socket_path = "$socket_path"
-host_key_file = "$host_key_file"
-agent_pubkey_file = "$agent_pubkey_dest"
-key_id = "host-key-1"
-host_id = "$host_id"
-hostname = "$hostname"
-service = "sudo"
-timeout_ms = 15000
-allowed_future_skew_ms = 30000
-EOF
+"$helper_bin" prepare-config \
+  --socket "$socket_path" \
+  --host-key-file "$host_key_file" \
+  --agent-pubkey-file "$agent_pubkey_dest" \
+  --host-id "$host_id" \
+  --hostname "$hostname" > "$config_file"
 chmod 0644 "$config_file"
 
 cat <<EOF
@@ -142,5 +143,5 @@ Give this host public key to the macOS agent allowlist:
   $host_pubkey_file
 
 Test with:
-  "$helper_bin" request --config "$config_file" --user "$USER"
+  "$helper_bin" request --config "$config_file" --user "$invoking_user"
 EOF

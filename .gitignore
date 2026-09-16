@@ -79,6 +79,8 @@ fuzz/corpus/
 fuzz/coverage/
 
 # Test and coverage artifacts
+__pycache__/
+*.pyc
 coverage/
 coverage-*.json
 lcov.info

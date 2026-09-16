@@ -22,21 +22,38 @@ For a syntax-only check:
 make -C pam check
 ```
 
+For noninteractive unit tests without root or live PAM configuration:
+
+```text
+make -C pam test
+```
+
+Linux tests exercise real fd execution. macOS tests use a test-only native
+execution adapter; the actual module fails closed there because macOS does not
+provide `fexecve`. Deploy this module only on Linux.
+
 ## PAM configuration example
 
 ```text
-auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/local/bin/macos-auth-helper
+auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/bin/macos-auth-helper
 auth include common-auth
 ```
 
-The helper must be an absolute path, a regular file, executable by owner, and not group/world writable. The development-only PAM option `unsafe_allow_helper_permissions` disables the group/world-writable helper check and should not be used in production.
+The helper must be an absolute path, a root-owned regular file, executable by
+owner, and not group/world writable. All ancestors must be root-owned,
+non-writable by others, and not symlinks. The validated descriptor is executed
+with Linux `fexecve`; arbitrary inherited descriptors are closed. The former
+`unsafe_allow_helper_permissions` option no longer bypasses validation.
+PAM always passes `--require-root-owned` to enforce the same trust policy on
+config, keys, and replay cache. User-owned development setups are tested by
+invoking the helper directly, never by weakening PAM.
 
 The PAM shim also enforces a helper process timeout. Default: `timeout_ms=20000`. On timeout it terminates the helper and maps the result to `PAM_AUTHINFO_UNAVAIL`, which should fall back to password when using the recommended PAM control syntax.
 
 Example with explicit timeout:
 
 ```text
-auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/local/bin/macos-auth-helper timeout_ms=25000
+auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/bin/macos-auth-helper timeout_ms=25000
 ```
 
 ## Helper exit code mapping

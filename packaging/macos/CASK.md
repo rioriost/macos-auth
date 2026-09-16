@@ -11,7 +11,7 @@ Repository/path:
 
 ```text
 cask "macos-auth" do
-  version "0.1.0"
+  version "0.1.2"
   sha256 "SHA256_OF_NOTARIZED_PKG"
 
   url "https://github.com/rioriost/macos-auth/releases/download/v#{version}/macos-auth-#{version}-darwin-arm64.pkg"
@@ -55,12 +55,17 @@ end
 The cask should point to a signed and notarized package named:
 
 ```text
-macos-auth-0.1.0-darwin-arm64.pkg
+macos-auth-0.1.2-darwin-arm64.pkg
 ```
 
 The package should pass:
 
 ```text
-pkgutil --check-signature macos-auth-0.1.0-darwin-arm64.pkg
-spctl --assess --type install -vv macos-auth-0.1.0-darwin-arm64.pkg
+xcrun stapler validate macos-auth-0.1.2-darwin-arm64.pkg
+pkgutil --check-signature macos-auth-0.1.2-darwin-arm64.pkg
+spctl --assess --type install -vv macos-auth-0.1.2-darwin-arm64.pkg
 ```
+
+Use the final-byte hash from the provenance-aware `notarize-pkg.sh` wrapper's
+`SHA256SUMS.cask`, not the hash of the unstapled signed intermediate. Publish a new
+versioned asset; never replace an asset in the already-published 0.1.1 release.

@@ -1,212 +1,239 @@
 # Release runbook
 
-This document maps the release process to reproducible `make` targets and scripts.
+Current release preparation targets **0.1.2**. Published releases, including
+0.1.1, are immutable: do not replace their assets or repoint their tags.
 
-## Status
+## Prerequisites and release source
 
-The release is reproducible from scripted steps in a full release checkout, but it is intentionally split by builder type.
+- Commit the complete release source and matching Cargo package versions before
+  building. All nine artifacts must come from that exact full commit SHA.
+- Builders and the collector require Git, tar, and Python 3.9+ (standard library
+  only). The collector must have the source commit locally to verify its version,
+  Git tree, and archive digest; its own HEAD may differ and is recorded separately.
+- Native Ubuntu 24.04 and 25.10 builders require Rust/Cargo, make, C compiler,
+  PAM development headers, and dpkg/dpkg-deb/dpkg-architecture.
+- Native RHEL 9/10-family builders require Rust/Cargo, make, GCC, PAM development
+  headers, rpm, and rpmbuild. These scripts do not support Fedora release artifacts.
+- An x86_64 Linux host with Podman can build the four x86_64 targets in Ubuntu
+  and UBI containers; it does not supply the four native arm64 acceptance results.
+- Apple Silicon macOS requires the committed `agent/` and LaunchAgent sources,
+  Swift/Xcode command-line tools, `pkgbuild`, `productbuild`, `codesign`,
+  `pkgutil`, `spctl`, and `xcrun` with `notarytool`/`stapler`. Distribution also
+  requires Developer ID Application and Installer identities plus a configured
+  notary Keychain profile.
+- Upload requires an authenticated `gh` with permission to manage releases.
+  Homebrew cask maintenance is in the separate `../homebrew-cask/` repository.
 
-Important scope note: the public source subset currently does not include the macOS agent source. The macOS package targets therefore require the full local/private checkout that contains `agent/`, macOS LaunchAgent scripts, and `packaging/macos/`.
+Keep private hostnames, credentials, and signing identity details in ignored local
+inventory (`docs/build-farm.local.md`) or local SSH/Keychain configuration. A tool
+being installed does not prove builder connectivity, signing access, or validation.
 
-- macOS package build/sign/notarize runs on the Apple Silicon Mac.
-- Linux x86_64 packages are built in clean Podman containers on an x86_64 Linux host.
-- Linux arm64/aarch64 packages are built natively on the relevant arm64/aarch64 Linux builders.
-- GitHub draft release upload runs from a machine with `gh` authentication.
-- Homebrew cask update is in the separate `../homebrew-cask/` repository.
-
-Do not hardcode private builder hostnames, LAN IP addresses, SSH usernames, signing passwords, or Apple credentials in this repository.
-
-## Common variables
-
-```text
-VERSION=0.1.0
-RELEASE_TAG=v0.1.0
-RELEASE_REPO=rioriost/macos-auth
+```sh
+VERSION=0.1.2
 SOURCE_COMMIT=$(git rev-parse HEAD)
 ```
 
+Check out this same commit on every builder. Release builds reject staged,
+unstaged, and non-ignored untracked files. They compile a fresh committed archive
+in isolated staging; ignored stale build outputs are never packaged.
+
 ## Linux package builds
 
-### Native `.deb`
+On each Ubuntu target:
 
-Run on the target Debian/Ubuntu builder:
-
-```text
+```sh
 make check
-make package-deb
+VERSION=0.1.2 packaging/linux/build-deb.sh
 ```
 
-Output:
+On each RHEL-family target:
 
-```text
-target/package/deb/macos-auth_0.1.0_<arch>.deb
-```
-
-### Native `.rpm`
-
-Run on the target RHEL-family builder:
-
-```text
+```sh
 make check
-make package-rpm
+VERSION=0.1.2 packaging/linux/build-rpm.sh
 ```
 
-Output:
+On the x86_64 Podman builder:
 
-```text
-target/package/rpm/macos-auth-0.1.0-1.<dist>.<arch>.rpm
+```sh
+VERSION=0.1.2 SOURCE_REF="$SOURCE_COMMIT" packaging/linux/build-x86_64-containers.sh
 ```
 
-### x86_64 clean container build
-
-Run on an x86_64 host with Podman:
+OS and architecture are detected on the builder. Both native and container paths
+produce identical canonical names:
 
 ```text
-make package-x86_64-containers
+macos-auth_0.1.2_ubuntu24.04_{amd64,arm64}.deb
+macos-auth_0.1.2_ubuntu25.10_{amd64,arm64}.deb
+macos-auth-0.1.2-1.rhel9.{x86_64,aarch64}.rpm
+macos-auth-0.1.2-1.rhel10.{x86_64,aarch64}.rpm
 ```
 
-Output:
+Each artifact has `<artifact>.metadata.json` and `<artifact>.sha256` sidecars.
+Copy these with the package; never rename packages or manufacture metadata on the
+collector. RPM's internal release is also `1.rhel9`/`1.rhel10`, not `1.elN`.
+Choose a fresh ignored output directory with `OUT_DIR` for rebuilds; existing
+artifact names are not silently overwritten.
 
-```text
-target/package/x86_64-containers/
+## macOS build and notarization
+
+Use a separate output directory for unsigned local experiments:
+
+```sh
+packaging/macos/build-pkg.sh --development --out-dir target/package/macos-dev
 ```
 
-## macOS package build
+Development snapshots record their exact input digest but are explicitly
+non-release, even if the worktree happens to be clean. `--skip-build` is rejected:
+an arbitrary previously built binary cannot prove its source.
 
-Unsigned local package:
+Build from the committed release source:
 
-```text
-make package-macos
+```sh
+make package-macos-signed VERSION=0.1.2 \
+  CODESIGN_IDENTITY="Developer ID Application: YOUR NAME (TEAMID)" \
+  PKG_SIGN_IDENTITY="Developer ID Installer: YOUR NAME (TEAMID)"
+make notarize-macos VERSION=0.1.2 NOTARY_PROFILE=macos-auth-notary
 ```
 
-Signed package:
+`notarize-pkg.sh` validates the signed input's sidecars, operates on an isolated
+copy, verifies the stapled ticket/signature/Gatekeeper assessment, and writes:
 
 ```text
-make package-macos-signed \
-  CODESIGN_IDENTITY="Developer ID Application: Ryo Fujita (23889H77KX)" \
-  PKG_SIGN_IDENTITY="Developer ID Installer: Ryo Fujita (23889H77KX)"
-```
-
-Notarize, staple, verify, and write the cask-named package:
-
-```text
-make notarize-macos NOTARY_PROFILE=macos-auth-notary
-```
-
-Output:
-
-```text
-target/package/macos/macos-auth-0.1.0-darwin-arm64.pkg
+target/package/macos/macos-auth-0.1.2-darwin-arm64.pkg
+target/package/macos/macos-auth-0.1.2-darwin-arm64.pkg.metadata.json
+target/package/macos/macos-auth-0.1.2-darwin-arm64.pkg.sha256
 target/package/macos/SHA256SUMS.cask
 ```
 
-## Assemble release directory
+The signed intermediate and its provenance remain unchanged. Final metadata links
+back to that input and hashes the **final stapled bytes**. Do not manually staple,
+rename, or copy over a recorded artifact. Existing final outputs cause an error.
+The build script never recursively removes a caller-selected output directory.
 
-Create a release directory containing:
+## Assemble and verify
 
-- all Linux `.deb` / `.rpm` artifacts
-- macOS `.pkg`
-- `SHA256SUMS`
-- `SHA256SUMS-darwin-arm64`
-- `BUILD-METADATA.txt`
-- `BUILD-METADATA-darwin-arm64.txt`
+Use local directories and/or scp-compatible remote builder directories:
 
-The exact builder inventory depends on local infrastructure, so private hostnames, LAN IPs, and SSH usernames are intentionally not hardcoded here. Store local inventory in `docs/build-farm.local.md`, shell aliases, or an ignored environment file.
-
-Use `RELEASE_ARTIFACT_SOURCES` with local directories and/or scp-compatible remote directories:
-
-```text
-RELEASE_ARTIFACT_SOURCES="target/package/x86_64-containers target/package/macos builder-alias:/path/to/arm64-artifacts" \
-  make release-collect VERSION=0.1.0
+```sh
+packaging/release/collect-artifacts.sh \
+  --version 0.1.2 --source-commit "$SOURCE_COMMIT" \
+  --out-dir target/package/release --clean \
+  --source target/package/x86_64-containers \
+  --source target/package/macos \
+  --source builder-alias:/path/to/arm64-artifacts
+packaging/release/verify-artifacts.sh \
+  --version 0.1.2 --source-commit "$SOURCE_COMMIT" \
+  --artifact-dir target/package/release --require-macos
 ```
 
-This writes:
+Alternatively use `make release-collect` with `RELEASE_ARTIFACT_SOURCES` and
+`SOURCE_COMMIT`, then `make release-verify`. Environment source lists split on
+whitespace; use repeated `--source` arguments for paths containing spaces.
 
-```text
-target/package/release/
+Collection preserves the original per-artifact sidecar bytes. It rejects missing
+metadata/checksums, changed bytes, wrong source revisions/trees/archives, mismatched
+versions, development/unsigned artifacts, and conflicting duplicate names.
+Identical duplicates are allowed; distinct builder records are conflicts even
+when the package hashes happen to agree. Remote retrieval errors are fatal.
+`--clean` removes only known release outputs, retaining unrelated files and edited
+release notes, and never recursively deletes the output directory.
+
+`BUILD-METADATA.txt` and `BUILD-METADATA-darwin-arm64.txt` contain schema-v1 JSON
+collection indexes. They distinguish `source.source_commit` from
+`collector.revision`/`collector.dirty` and pin every builder sidecar by SHA256.
+`SHA256SUMS` covers all Linux packages; `SHA256SUMS-darwin-arm64` covers macOS.
+Verification requires **all eight Linux packages**, and the normal release target
+additionally requires notarized macOS. On macOS it also reruns stapler, signature,
+and Gatekeeper checks. Hash/provenance checks are not package install or PAM tests.
+
+These records are integrity/provenance manifests from trusted builders, not
+cryptographically signed attestations. Protect builder access and the transport.
+Old artifacts without provenance must be rebuilt; do not backfill their origin.
+
+### Explicit source + macOS-only release
+
+If Linux builders are unavailable, a release owner may explicitly choose a
+source + macOS-only release, as with the published 0.1.1 macOS-only rebuild.
+This is **not** an automatic fallback or a successful full-matrix release.
+The normal `make release-verify` and draft-upload defaults still require all eight
+Linux packages plus notarized macOS.
+
+Build/sign/notarize the macOS package from the clean committed release source as
+above. Use a distinct staging directory and run the strict selection **on macOS**:
+
+```sh
+packaging/release/collect-artifacts.sh \
+  --version 0.1.2 --source-commit "$SOURCE_COMMIT" \
+  --out-dir target/package/release-macos --clean --macos-only \
+  --source target/package/macos
+packaging/release/verify-artifacts.sh \
+  --version 0.1.2 --source-commit "$SOURCE_COMMIT" \
+  --artifact-dir target/package/release-macos --macos-only
 ```
 
-Then verify package presence and checksums:
+`--macos-only` requires the canonical notarized package, original builder metadata
+and checksums, expected source revision/version/tree/archive, final-byte hashes,
+and matching collection indexes. It rejects Linux packages in this directory.
+It also requires successful stapler, package signature, and Gatekeeper checks;
+non-macOS hosts fail rather than silently skipping those checks.
 
-```text
-make release-verify VERSION=0.1.0
+Generate explicitly scoped notes, then edit them with actual test evidence and
+all limitations:
+
+```sh
+VERSION=0.1.2 SOURCE_COMMIT="$SOURCE_COMMIT" RELEASE_SCOPE=macos-only \
+  OUT_FILE=target/package/release-macos/RELEASE-NOTES.md \
+  packaging/release/make-notes.sh
+packaging/release/upload-draft.sh --macos-only \
+  --repo rioriost/macos-auth --tag v0.1.2 --target "$SOURCE_COMMIT" \
+  --title "macos-auth v0.1.2 — source + macOS only" \
+  --notes-file target/package/release-macos/RELEASE-NOTES.md \
+  --artifact-dir target/package/release-macos
 ```
 
-## Generate release notes
+Draft upload reruns this strict limited-scope gate only when `--macos-only` is
+explicit. Published-release protection is identical in both modes. GitHub's source
+archives come from the tag; they do not imply that any Linux packages were built
+or validated. Publishing remains a separate deliberate action.
 
-```text
-make release-notes VERSION=0.1.0 SOURCE_COMMIT=$(git rev-parse HEAD)
+## Release notes and draft upload
+
+```sh
+make release-notes VERSION=0.1.2 SOURCE_COMMIT="$SOURCE_COMMIT"
+# Edit target/package/release/RELEASE-NOTES.md with actual validation evidence.
+make release-upload-draft VERSION=0.1.2 RELEASE_TAG=v0.1.2 \
+  SOURCE_COMMIT="$SOURCE_COMMIT" RELEASE_REPO=rioriost/macos-auth
 ```
 
-Output:
+By default, upload independently runs the full nine-package verification gate. It queries
+`isDraft` before any mutation and refuses published releases. A failed query is not
+interpreted as absence: creation requires a successful complete release listing
+that confirms the tag is missing. Auth, network, and ambiguous query failures stop
+the upload. Existing draft assets may be replaced with `--clobber`.
 
-```text
-target/package/release/RELEASE-NOTES.md
+Do not publish concurrently with an upload: the script rechecks immediately before
+mutations, but GitHub does not provide an atomic draft-state precondition. Publishing
+is an explicit separate human-controlled action; this script never publishes.
+
+## Validation and remaining manual gates
+
+Offline regression tests (no network, package installation, or Apple operations):
+
+```sh
+python3 -B -m unittest discover -s packaging/release/tests -v
+make shell-check
 ```
 
-Edit the generated checklist from `[ ]` to completed validation notes before upload/publish. `make release-upload-draft` intentionally does not regenerate release notes, so manual validation edits are preserved.
+The tests use synthetic bytes and mocked GitHub/Apple commands; they do **not**
+establish real package, signing, notarization, or PAM acceptance.
 
-## Upload/update GitHub draft release
+Before promotion, record `make check` on supported builders, install/uninstall and
+PAM smoke results for all Linux targets, and actual macOS install/LaunchAgent/SSH
+end-to-end results. Run `pamtester` before any deliberate sudo PAM edits and keep
+a root shell open. Certificate setup, notary credentials, publication, and pushing
+the cask tap remain explicit manual gates.
 
-```text
-make release-upload-draft \
-  VERSION=0.1.0 \
-  RELEASE_TAG=v0.1.0 \
-  RELEASE_REPO=rioriost/macos-auth \
-  SOURCE_COMMIT=$(git rev-parse HEAD) \
-  RELEASE_DIR=target/package/release \
-  RELEASE_NOTES=target/package/release/RELEASE-NOTES.md
-```
-
-This creates or updates a draft release and uploads matching assets. Existing assets with the same names are overwritten.
-
-Check status:
-
-```text
-make release-status VERSION=0.1.0 RELEASE_REPO=rioriost/macos-auth
-```
-
-## Homebrew cask update
-
-The cask lives in `../homebrew-cask/`.
-
-After the macOS package is notarized:
-
-1. Copy the SHA256 from `target/package/macos/SHA256SUMS.cask`.
-2. Update `../homebrew-cask/Casks/macos-auth.rb`.
-3. Run:
-
-```text
-HOMEBREW_NO_AUTO_UPDATE=1 brew style --cask rioriost/cask/macos-auth
-HOMEBREW_NO_AUTO_UPDATE=1 brew audit --cask rioriost/cask/macos-auth
-```
-
-The cask install test requires the GitHub release to be published, because Homebrew cannot download assets from a draft release.
-
-## Current reproducibility boundary
-
-The following parts are now scripted:
-
-- Linux native package builds: `make package-deb` / `make package-rpm`
-- x86_64 container builds: `make package-x86_64-containers`
-- macOS package build/sign/notarize in a full local checkout: `make package-macos-signed` / `make notarize-macos`
-- artifact collection: `make release-collect`
-- artifact checksum verification: `make release-verify`
-- draft release upload/update: `make release-upload-draft`
-- release notes generation: `make release-notes`
-
-The following remain intentionally outside the public Makefile as hardcoded values:
-
-- private builder hostnames/IPs and SSH users
-- Apple credentials and Keychain item names
-- Homebrew cask repository push/publish decision
-
-## Remaining manual gates
-
-These should remain explicit human-controlled gates:
-
-- Apple Developer certificate creation/import.
-- Notary credential creation.
-- Publishing the GitHub release.
-- Pushing the Homebrew cask tap.
-- Editing real `/etc/pam.d/sudo` during end-to-end validation.
+After actual notarization, update the separate cask to 0.1.2 using the final hash
+in `SHA256SUMS.cask`, then run `brew style --cask` and `brew audit --cask`.
+Homebrew download/install testing requires a published release, not a draft.

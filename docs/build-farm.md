@@ -15,14 +15,24 @@ Keep concrete hostnames, LAN IP addresses, usernames, SSH details, signing keys,
 
 | Role | Architecture | Intended use |
 |---|---:|---|
-| Ubuntu LTS arm64 builder | `aarch64` / `arm64` | Build and validate `.deb arm64` packages |
-| Ubuntu current arm64 builder | `aarch64` / `arm64` | Forward-looking `.deb arm64` validation |
+| Ubuntu 24.04 arm64 builder | `aarch64` / `arm64` | Build and validate Ubuntu 24.04 `.deb arm64` packages |
+| Ubuntu 25.10 arm64 builder | `aarch64` / `arm64` | Build and validate Ubuntu 25.10 `.deb arm64` packages |
 | RHEL 9 arm64 builder | `aarch64` | Build and validate `.rpm aarch64` packages for RHEL 9-family systems |
 | RHEL 10 arm64 builder | `aarch64` | Forward-looking `.rpm aarch64` validation |
 | Native Linux x86_64 builder | `x86_64` | Build and validate x86_64 artifacts on native hardware |
 | macOS Apple Silicon builder | `arm64` | Build signed/notarized macOS artifacts |
 
 Arch Linux is not part of the current build-farm plan.
+
+These are required roles, not proof that a reachable builder is configured.
+An absent local inventory means connectivity and credentials still need to be
+established privately. An Apple Silicon host cannot supply native x86_64
+acceptance merely because Podman is installed.
+
+For 0.1.2, build all eight Linux distro/architecture targets and notarized macOS
+from one clean committed revision. Builders and collector require Git, tar, and
+Python 3.9+ in addition to their native toolchains. See the
+[release runbook](release-runbook.md) for the complete tool inventory.
 
 ## Local inventory template
 
@@ -92,7 +102,11 @@ A release artifact can be promoted only after:
 4. `pamtester` passes before any `sudo` PAM edits.
 5. Fallback and hard-fail cases are manually verified.
 6. Rollback is verified.
-7. Artifact checksums are recorded.
+7. Builder `.metadata.json` and `.sha256` sidecars accompany each artifact.
+8. Collection verifies version, full source commit/tree/archive digest, clean-source
+   provenance, and final-byte hashes. Collector revision is recorded separately;
+   mixed/outdated or undocumented-origin artifacts must be rebuilt, not relabeled.
+9. `make release-verify` passes the eight-Linux-plus-notarized-macOS gate.
 
 ## Public-scope checklist
 

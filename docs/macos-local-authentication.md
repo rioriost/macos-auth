@@ -11,17 +11,46 @@ The agent selects the policy by macOS version:
 | macOS version | Policy |
 |---|---|
 | macOS 15+ | `deviceOwnerAuthenticationWithBiometricsOrCompanion` |
-| macOS 10.15–14 | `deviceOwnerAuthenticationWithBiometricsOrWatch` |
+| macOS 13–14 | `deviceOwnerAuthenticationWithBiometricsOrWatch` |
 
 The agent flow is:
 
 1. verify Linux host allowlist
 2. verify request signature
 3. verify request freshness
-4. show confirmation UI, unless `require_confirmation=false`
+4. show confirmation UI if `require_confirmation=true` (default: `false`)
 5. call `LAContext.canEvaluatePolicy`
 6. call `LAContext.evaluatePolicy`
 7. map the result to a signed response decision
+
+The Swift package requires macOS 13 or later.
+
+## Request lifetime and concurrency
+
+Both `serve` and `fake-agent` admit at most eight active connections. Excess
+connections are closed rather than queued in unbounded background work. A client
+has an absolute two-second frame-read budget (header and body combined), within
+a fifteen-second total connection budget starting at acceptance. Partial reads
+and writes do not reset these deadlines.
+
+Verified requests share one authentication slot. Waiting for that slot, optional
+confirmation, LocalAuthentication, and response writing all count against the
+earlier of the connection deadline and the signed request expiry. The agent also
+checks wall-clock expiry, while monotonic deadlines prevent a backward clock
+adjustment from extending a request.
+
+While waiting or authenticating, the agent checks expiry and peer disconnect
+about every 25 ms. Cancellation invalidates the `LAContext`; a confirmation alert
+has a modal-run-loop timer that dismisses it on cancellation. AppKit and
+LocalAuthentication initiation run on the main thread. Late callbacks cannot
+produce an approval: the lifetime is rechecked before constructing and sending
+the signed response, whose expiry never exceeds the request expiry.
+
+The helper's signed request expiry must match its total timeout (normally 15
+seconds), inside PAM's outer timeout (normally 20 seconds). The agent does not
+extend a nearly expired request to give a response extra time. Expired,
+disconnected, or overloaded connections are closed without approval. Unix socket
+writes use `SO_NOSIGPIPE`, so a disconnected peer cannot terminate the agent.
 
 ## Result mapping
 
@@ -52,7 +81,8 @@ If a macOS policy allows macOS password fallback in a way that cannot be disable
 
 LocalAuthentication prompts often have limited context, especially on Apple Watch.
 
-For this reason, the agent shows an explicit confirmation alert before LocalAuthentication by default. It includes:
+For more context, enable the optional explicit confirmation alert before
+LocalAuthentication. It includes:
 
 - Linux hostname
 - Linux host id
@@ -71,7 +101,10 @@ This confirmation is controlled by:
 }
 ```
 
-Disabling it is not recommended outside development.
+The default is intentionally `false`: the LocalAuthentication prompt is still
+required, but the extra confirmation alert is skipped. Set this to `true` when
+the additional host/user/command context is desired. Its time counts against the
+same request deadline; it does not grant a separate approval window.
 
 ## Apple Watch behavior
 
@@ -103,6 +136,18 @@ Before claiming support for a macOS version, test:
 | repeated biometric failure | `failed` or `unavailable`, depending on OS lockout behavior |
 | invalid Linux host signature | no UI, no LocalAuthentication prompt |
 | unlisted Linux host id | no UI, no LocalAuthentication prompt |
+| request expires during confirmation or LocalAuthentication | dismiss/invalidate; no approval |
+| helper disconnects during confirmation or LocalAuthentication | dismiss/invalidate; no approval |
+| a callback arrives after cancellation | ignored for approval |
+| idle or partial-frame client, followed by a valid client | valid client can proceed within connection limits |
+
+`swift test --package-path agent` covers transport deadlines, disconnected writes,
+bounded admission, queued authentication expiry, cancellation/late callback
+handling, modal-panel-mode cancellation timer delivery, filesystem safety, and protocol vectors without biometric UI or
+Keychain access. It uses mock authentication sessions and injectable clocks;
+the fake-agent subprocess integration uses only fixed development keys and
+disposable fixtures under `agent/`. Actual alert dismissal and OS-provided
+LocalAuthentication behavior still require the manual matrix above.
 
 ## Prompt rate limiting
 
@@ -137,5 +182,4 @@ Potential improvements:
 - add a strict mode for policies that never allow macOS password fallback, if possible
 - add OS compatibility documentation based on real testing
 - improve the confirmation UI
-- add prompt rate limiting
 - add telemetry-free local logs for LocalAuthentication error codes

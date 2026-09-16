@@ -47,7 +47,7 @@ case "$package_path" in
     dpkg -i "$package_path"
 
     echo "Checking helper"
-    /usr/bin/macos-auth-helper --help >/tmp/macos-auth-helper-help.txt
+    /usr/bin/macos-auth-helper --help >/dev/null
 
     echo "Installed files"
     dpkg -L "$package_name"
@@ -69,7 +69,7 @@ case "$package_path" in
     rpm -Uvh --replacepkgs "$package_path"
 
     echo "Checking helper"
-    /usr/bin/macos-auth-helper --help >/tmp/macos-auth-helper-help.txt
+    /usr/bin/macos-auth-helper --help >/dev/null
 
     echo "Installed files"
     rpm -ql "$package_name"

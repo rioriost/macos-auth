@@ -1,23 +1,25 @@
-VERSION ?= 0.1.1
+VERSION ?= 0.1.2
+PYTHON ?= python3
 RELEASE_TAG ?= v$(VERSION)
 RELEASE_REPO ?= rioriost/macos-auth
 RELEASE_TITLE ?= macos-auth v$(VERSION) packages
 RELEASE_DIR ?= target/package/release
 RELEASE_NOTES ?= $(RELEASE_DIR)/RELEASE-NOTES.md
+RELEASE_SCOPE_FLAGS ?=
 SOURCE_COMMIT ?= $(shell git rev-parse HEAD)
 NOTARY_PROFILE ?= macos-auth-notary
 MACOS_SIGNED_PKG ?= target/package/macos/macos-auth-$(VERSION)-darwin-arm64-signed.pkg
 MACOS_FINAL_PKG ?= target/package/macos/macos-auth-$(VERSION)-darwin-arm64.pkg
 
-.PHONY: all build test check fmt rust-build rust-test pam-build pam-check shell-check package-deb package-rpm package-x86_64-containers package-macos package-macos-signed notarize-macos release-collect release-verify release-notes release-upload-draft release-status clean
+.PHONY: all build test check fmt rust-build rust-test pam-build pam-check pam-e2e swift-build swift-test python-test shell-check package-deb package-rpm package-x86_64-containers package-macos package-macos-signed notarize-macos release-collect release-verify release-notes release-upload-draft release-status clean
 
 all: check
 
-build: rust-build pam-build
+build: rust-build pam-build swift-build
 
-check: fmt rust-test pam-check shell-check
+check: fmt rust-test pam-check swift-test python-test shell-check
 
-test: rust-test
+test: rust-test pam-check swift-test python-test
 
 fmt:
 	cargo fmt --all -- --check
@@ -32,22 +34,26 @@ pam-build:
 	$(MAKE) -C pam
 
 pam-check:
-	$(MAKE) -C pam check
+	$(MAKE) -C pam check test
+
+pam-e2e: rust-build pam-build
+	$(PYTHON) tests/pam_e2e.py
+
+swift-build:
+	@if [ "$$(uname -s)" = Darwin ]; then swift build --package-path agent; else echo "Swift agent build requires macOS"; fi
+
+swift-test:
+	@if [ "$$(uname -s)" = Darwin ]; then \
+	  swift test --package-path agent && \
+	  agent/.build/debug/macos-auth-agent verify-vector --path test-vectors/v1/approval.json; \
+	else echo "Swift agent tests require macOS"; fi
+
+python-test:
+	$(PYTHON) -m unittest discover -s tests -p 'test_*.py'
+	$(PYTHON) -B -m unittest discover -s packaging/release/tests -p 'test_*.py'
 
 shell-check:
-	sh -n scripts/check.sh
-	sh -n scripts/linux-dev-setup.sh
-	sh -n scripts/linux-install-dev.sh
-	sh -n packaging/linux/build-deb.sh
-	sh -n packaging/linux/build-rpm.sh
-	sh -n packaging/linux/build-x86_64-containers.sh
-	sh -n packaging/linux/smoke-test-package.sh
-	if [ -f packaging/macos/build-pkg.sh ]; then sh -n packaging/macos/build-pkg.sh; fi
-	if [ -f packaging/macos/notarize-pkg.sh ]; then sh -n packaging/macos/notarize-pkg.sh; fi
-	if [ -f packaging/release/collect-artifacts.sh ]; then sh -n packaging/release/collect-artifacts.sh; fi
-	if [ -f packaging/release/verify-artifacts.sh ]; then sh -n packaging/release/verify-artifacts.sh; fi
-	if [ -f packaging/release/make-notes.sh ]; then sh -n packaging/release/make-notes.sh; fi
-	if [ -f packaging/release/upload-draft.sh ]; then sh -n packaging/release/upload-draft.sh; fi
+	@set -e; for script in scripts/*.sh packaging/linux/*.sh packaging/macos/*.sh packaging/release/*.sh; do sh -n "$$script"; done
 
 package-deb:
 	packaging/linux/build-deb.sh
@@ -75,11 +81,11 @@ notarize-macos:
 release-collect:
 	@test -n "$(RELEASE_ARTIFACT_SOURCES)" || { echo "Set RELEASE_ARTIFACT_SOURCES to local/remote artifact directories" >&2; exit 2; }
 	@if [ ! -x packaging/release/collect-artifacts.sh ]; then echo "packaging/release/collect-artifacts.sh is not available in this checkout" >&2; exit 1; fi
-	RELEASE_ARTIFACT_SOURCES="$(RELEASE_ARTIFACT_SOURCES)" packaging/release/collect-artifacts.sh --out-dir "$(RELEASE_DIR)" --version "$(VERSION)" --clean
+	RELEASE_ARTIFACT_SOURCES="$(RELEASE_ARTIFACT_SOURCES)" packaging/release/collect-artifacts.sh --out-dir "$(RELEASE_DIR)" --version "$(VERSION)" --source-commit "$(SOURCE_COMMIT)" $(RELEASE_SCOPE_FLAGS) --clean
 
 release-verify:
 	@if [ ! -x packaging/release/verify-artifacts.sh ]; then echo "packaging/release/verify-artifacts.sh is not available in this checkout" >&2; exit 1; fi
-	packaging/release/verify-artifacts.sh --artifact-dir "$(RELEASE_DIR)" --version "$(VERSION)" --require-macos
+	packaging/release/verify-artifacts.sh --artifact-dir "$(RELEASE_DIR)" --version "$(VERSION)" --source-commit "$(SOURCE_COMMIT)" --require-macos $(RELEASE_SCOPE_FLAGS)
 
 release-notes:
 	@if [ ! -x packaging/release/make-notes.sh ]; then echo "packaging/release/make-notes.sh is not available in this checkout" >&2; exit 1; fi
@@ -88,7 +94,7 @@ release-notes:
 release-upload-draft:
 	@if [ ! -f "$(RELEASE_NOTES)" ]; then echo "Release notes not found: $(RELEASE_NOTES). Run make release-notes and edit/check validation before upload." >&2; exit 1; fi
 	@if [ ! -x packaging/release/upload-draft.sh ]; then echo "packaging/release/upload-draft.sh is not available in this checkout" >&2; exit 1; fi
-	packaging/release/upload-draft.sh --repo "$(RELEASE_REPO)" --tag "$(RELEASE_TAG)" --target "$(SOURCE_COMMIT)" --title "$(RELEASE_TITLE)" --notes-file "$(RELEASE_NOTES)" --artifact-dir "$(RELEASE_DIR)"
+	packaging/release/upload-draft.sh --repo "$(RELEASE_REPO)" --tag "$(RELEASE_TAG)" --target "$(SOURCE_COMMIT)" --title "$(RELEASE_TITLE)" --notes-file "$(RELEASE_NOTES)" --artifact-dir "$(RELEASE_DIR)" $(RELEASE_SCOPE_FLAGS)
 
 release-status:
 	gh release view "$(RELEASE_TAG)" --repo "$(RELEASE_REPO)"

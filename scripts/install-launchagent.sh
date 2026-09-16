@@ -37,6 +37,14 @@ fi
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --agent-bin|--config|--log-dir|--plist)
+      if [ "$#" -lt 2 ]; then
+        echo "Missing value for $1" >&2
+        exit 2
+      fi
+      ;;
+  esac
+  case "$1" in
     --agent-bin)
       agent_bin="$2"
       shift 2
@@ -70,15 +78,12 @@ if [ -z "$agent_bin" ] || [ -z "$config_path" ]; then
   exit 2
 fi
 
-case "$agent_bin" in
-  /*) ;;
-  *) echo "--agent-bin must be absolute" >&2; exit 2 ;;
-esac
-
-case "$config_path" in
-  /*) ;;
-  *) echo "--config must be absolute" >&2; exit 2 ;;
-esac
+for path in "$agent_bin" "$config_path" "$log_dir" "$plist_path"; do
+  case "$path" in
+    /*) ;;
+    *) echo "All paths must be absolute: $path" >&2; exit 2 ;;
+  esac
+done
 
 if [ ! -x "$agent_bin" ]; then
   echo "agent binary is not executable: $agent_bin" >&2
@@ -92,24 +97,32 @@ fi
 
 mkdir -p "$(dirname -- "$plist_path")" "$log_dir"
 
-escape_sed() {
-  printf '%s' "$1" | sed 's/[&|]/\\&/g'
-}
+if [ -L "$plist_path" ] || { [ -e "$plist_path" ] && [ ! -f "$plist_path" ]; }; then
+  echo "plist path must be a regular file, not a symlink: $plist_path" >&2
+  exit 1
+fi
 
-agent_bin_escaped=$(escape_sed "$agent_bin")
-config_path_escaped=$(escape_sed "$config_path")
-log_dir_escaped=$(escape_sed "$log_dir")
+temp_plist=$(mktemp "${plist_path}.tmp.XXXXXX")
+trap 'rm -f "$temp_plist"' EXIT
+trap 'exit 1' HUP INT TERM
+cp "$template_path" "$temp_plist"
+plutil -remove ProgramArguments.0 "$temp_plist"
+plutil -insert ProgramArguments.0 -string "$agent_bin" "$temp_plist"
+plutil -remove ProgramArguments.3 "$temp_plist"
+plutil -insert ProgramArguments.3 -string "$config_path" "$temp_plist"
+plutil -replace StandardOutPath -string "$log_dir/agent.stdout.log" "$temp_plist"
+plutil -replace StandardErrorPath -string "$log_dir/agent.stderr.log" "$temp_plist"
+plutil -lint "$temp_plist"
+chmod 0644 "$temp_plist"
 
-sed \
-  -e "s|__MACOS_AUTH_AGENT_BIN__|$agent_bin_escaped|g" \
-  -e "s|__MACOS_AUTH_AGENT_CONFIG__|$config_path_escaped|g" \
-  -e "s|__MACOS_AUTH_LOG_DIR__|$log_dir_escaped|g" \
-  "$template_path" > "$plist_path"
+domain="gui/$(id -u)"
+service="$domain/com.macos-auth.agent"
+if launchctl print "$service" >/dev/null 2>&1; then
+  launchctl bootout "$service"
+fi
+mv -f "$temp_plist" "$plist_path"
 
-chmod 0644 "$plist_path"
-
-launchctl bootout "gui/$(id -u)" "$plist_path" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/$(id -u)" "$plist_path"
-launchctl enable "gui/$(id -u)/com.macos-auth.agent"
+launchctl bootstrap "$domain" "$plist_path"
+launchctl enable "$service"
 
 echo "Installed and loaded $plist_path"

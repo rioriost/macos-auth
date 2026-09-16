@@ -2,12 +2,13 @@
 
 `macos-auth` is an experimental PAM module, Linux helper, and macOS user-session agent for approving Linux authentication requests from a Mac.
 
-This public repository contains the Linux build and packaging subset, release packaging documentation, and user-facing setup notes. The macOS agent package is distributed as a signed/notarized release asset and Homebrew cask; the macOS agent source is not part of this public source subset yet.
+This public repository contains the Rust protocol and Linux helper, C PAM module, Swift macOS agent, packaging scripts, and setup documentation. The macOS agent package is distributed as a signed/notarized release asset and Homebrew cask.
 
-Public Linux-side contents include:
+Contents include:
 
 - Rust protocol and Linux helper crates
 - C PAM shim
+- Swift macOS agent and LaunchAgent setup
 - Linux package build scripts and package metadata
 - Linux testing and packaging documentation
 
@@ -133,17 +134,19 @@ Useful installed commands:
 ### 2. Install the Linux package `[Linux]`
 
 Run this on **Linux**. Download the package matching your Linux distribution family and architecture from the release assets.
+For a source/macOS-only release, build the Linux package from that release's tag;
+do not substitute an older package and assume it includes the newer authentication fixes.
 
 Ubuntu/Debian example:
 
 ```text
-sudo dpkg -i macos-auth_0.1.0_ubuntu24.04_arm64.deb
+sudo dpkg -i macos-auth_0.1.2_ubuntu24.04_arm64.deb
 ```
 
 RHEL-family example:
 
 ```text
-sudo rpm -Uvh macos-auth-0.1.0-1.rhel9.aarch64.rpm
+sudo rpm -Uvh macos-auth-0.1.2-1.rhel9.aarch64.rpm
 ```
 
 Packages install the helper and PAM module, but they do **not** modify `/etc/pam.d/sudo`.
@@ -257,12 +260,14 @@ Example SSH config on macOS:
 Host linux-with-macos-auth
     HostName linux.example.com
     User alice
-    RemoteForward /run/user/1000/macos-auth-agent.sock /Users/alice/Library/Application Support/macos-auth/agent.sock
-    StreamLocalBindUnlink yes
+    RemoteForward /run/user/1000/macos-auth-agent.sock "/Users/alice/Library/Application Support/macos-auth/agent.sock"
     ExitOnForwardFailure yes
 ```
 
 Adjust `/run/user/1000` to the Linux user's UID and the macOS socket path to your agent config.
+For reconnects, set `StreamLocalBindUnlink yes` in the **Linux server's**
+`sshd_config`, scoped to the intended user. The macOS client option does not
+remove a stale remote socket. See [SSH transport](docs/ssh-transport.md).
 
 ## How to use
 
@@ -417,6 +422,7 @@ sudo true
 | Protocol crate | `crates/protocol` | Signed request/response types, canonical bytes, signature verification |
 | Linux helper | `crates/helper` | Generates signed PAM requests, talks to agent socket, verifies responses |
 | PAM shim | `pam/pam_macos_auth.c` | Extracts PAM context, invokes helper, maps helper exit codes to PAM results |
+| macOS agent | `agent/` | Verifies Linux requests, manages bounded LocalAuthentication, signs responses |
 | Debian packaging | `packaging/linux/build-deb.sh`, `packaging/linux/deb/` | Native `.deb` package build |
 | RPM packaging | `packaging/linux/build-rpm.sh`, `packaging/linux/rpm/` | Native `.rpm` package build |
 | Linux setup helpers | `scripts/linux-*.sh` | Development config/install helpers for VM testing |
@@ -427,13 +433,13 @@ Debian/Ubuntu builders:
 
 ```text
 sudo apt-get update
-sudo apt-get install -y build-essential cargo dpkg-dev libpam0g-dev make rustc
+sudo apt-get install -y build-essential cargo dpkg-dev libpam0g-dev make rustc python3 openssh-client
 ```
 
 Fedora/RHEL-family builders:
 
 ```text
-sudo dnf install -y cargo gcc make pam-devel rpm-build rust
+sudo dnf install -y cargo gcc make pam-devel rpm-build rust python3 openssh-clients
 ```
 
 Using a current Rust toolchain through `rustup` is also acceptable on local builders.

@@ -7,7 +7,7 @@ import Security
 
 private let supportedProtocolVersion: UInt16 = 1
 private let nonceLength = 32
-private let maxFrameLength = 1024 * 1024
+let maxFrameLength = 1024 * 1024
 private let requestDomain = Array("macos-auth/auth-request/v1".utf8)
 private let responseDomain = Array("macos-auth/auth-response/v1".utf8)
 
@@ -19,6 +19,7 @@ enum AgentError: Error, CustomStringConvertible {
     case invalidSignature
     case socket(String)
     case io(String)
+    case timeout
 
     var description: String {
         switch self {
@@ -29,6 +30,7 @@ enum AgentError: Error, CustomStringConvertible {
         case .invalidSignature: return "signature verification failed"
         case .socket(let message): return "socket error: \(message)"
         case .io(let message): return "io error: \(message)"
+        case .timeout: return "request deadline exceeded"
         }
     }
 }
@@ -134,10 +136,10 @@ struct AuthRequestBody: Codable {
     }
 
     func verifyFreshness(nowMs: UInt64, allowedFutureSkewMs: UInt64) throws {
-        if nowMs > expiresAtMs {
+        if nowMs >= expiresAtMs {
             throw AgentError.invalidPayload("request expired")
         }
-        if createdAtMs > nowMs + allowedFutureSkewMs {
+        if createdAtMs > nowMs && createdAtMs - nowMs > allowedFutureSkewMs {
             throw AgentError.invalidPayload("request created too far in the future")
         }
     }
@@ -148,6 +150,21 @@ struct SignedAuthResponse: Codable {
     let signature: [UInt8]
 }
 
+enum Decision: String, Codable, CaseIterable {
+    case approved, denied, unavailable, cancelled, failed
+}
+
+enum AuthMethod: String, Codable, CaseIterable {
+    case watch
+    case touchID = "touch-id"
+    case biometricOrWatch = "biometric-or-watch"
+    case unknown, none
+
+    var canonicalName: String {
+        self == .touchID ? "touchid" : rawValue
+    }
+}
+
 struct AuthResponseBody: Codable {
     let protocolVersion: UInt16
     let requestId: String
@@ -156,8 +173,8 @@ struct AuthResponseBody: Codable {
     let linuxHostId: String
     let pamService: String
     let pamUser: String
-    let decision: String
-    let authMethod: String
+    let decision: Decision
+    let authMethod: AuthMethod
     let createdAtMs: UInt64
     let expiresAtMs: UInt64
     let agentKeyId: String
@@ -185,12 +202,15 @@ struct AuthResponseBody: Codable {
 
     static func forRequest(
         _ request: AuthRequestBody,
-        decision: String,
-        authMethod: String,
+        decision: Decision,
+        authMethod: AuthMethod,
         nowMs: UInt64,
         agentKeyId: String
     ) throws -> AuthResponseBody {
-        AuthResponseBody(
+        guard nowMs < request.expiresAtMs else {
+            throw AgentError.timeout
+        }
+        return AuthResponseBody(
             protocolVersion: request.protocolVersion,
             requestId: request.requestId,
             nonce: request.nonce,
@@ -201,7 +221,7 @@ struct AuthResponseBody: Codable {
             decision: decision,
             authMethod: authMethod,
             createdAtMs: nowMs,
-            expiresAtMs: nowMs + 10_000,
+            expiresAtMs: nowMs + min(10_000, request.expiresAtMs - nowMs),
             agentKeyId: agentKeyId,
             alg: "ed25519",
             errorCode: nil,
@@ -235,8 +255,8 @@ struct AuthResponseBody: Codable {
         try encodeString(&out, linuxHostId)
         try encodeString(&out, pamService)
         try encodeString(&out, pamUser)
-        try encodeString(&out, decision)
-        try encodeString(&out, authMethod)
+        try encodeString(&out, decision.rawValue)
+        try encodeString(&out, authMethod.canonicalName)
         encodeUInt64(&out, createdAtMs)
         encodeUInt64(&out, expiresAtMs)
         try encodeString(&out, agentKeyId)
@@ -254,7 +274,7 @@ struct FakeAgentOptions {
     let agentKeyHex: String?
     let agentKeyFile: String?
     let agentKeyId: String
-    let decision: String
+    let decision: Decision
     let once: Bool
 }
 
@@ -357,6 +377,7 @@ struct AgentRuntime {
 }
 
 final class RateLimiter {
+    private let lock = NSLock()
     private let windowMs: UInt64
     private let maxRequests: Int
     private var eventsByKey: [String: [UInt64]] = [:]
@@ -367,6 +388,8 @@ final class RateLimiter {
     }
 
     func allow(_ request: AuthRequestBody) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
         if maxRequests <= 0 {
             return true
         }
@@ -542,7 +565,7 @@ enum MacosAuthAgent {
             index += 1
         }
 
-        guard ["approved", "denied", "unavailable", "cancelled", "failed"].contains(decision) else {
+        guard let decision = Decision(rawValue: decision) else {
             throw AgentError.usage("invalid decision \(decision)")
         }
         guard let socketPath else { throw AgentError.usage("missing --socket") }
@@ -839,40 +862,26 @@ enum MacosAuthAgent {
         defer { listener.closeAndUnlink() }
 
         fputs("macos-auth-agent serving on \(config.socketPath)\n", stderr)
-
-        while true {
-            let handle = try listener.acceptFileHandle()
-            do {
-                try handleServeRequest(handle: handle, runtime: runtime)
-            } catch {
-                fputs("macos-auth-agent request failed: \(error)\n", stderr)
-            }
-            try? handle.close()
-            if options.once {
-                break
-            }
+        let authenticator = AuthenticationCoordinator()
+        try runSocketServer(listener: listener, once: options.once) { handle, deadline in
+            try handleServeRequest(handle: handle, runtime: runtime, deadline: deadline, authenticator: authenticator)
         }
     }
 
     static func loadAgentConfig(path: String) throws -> AgentConfig {
-        try validateFilePermissions(path: path, label: "agent config", privateMaterial: false)
-        let url = URL(fileURLWithPath: path)
-        let data = try Data(contentsOf: url)
-        return try JSONDecoder().decode(AgentConfig.self, from: data)
+        let (data, metadata) = try readSafeFile(path: path, label: "agent config", privateMaterial: false)
+        let config = try JSONDecoder().decode(AgentConfig.self, from: data)
+        if config.agentKeyHex != nil {
+            try validateFileMetadata(metadata, label: "agent config with inline private key", privateMaterial: true)
+        }
+        return config
     }
 
     static func writeAgentConfig(_ config: AgentConfig, path: String) throws {
-        try validateFilePermissions(path: path, label: "agent config", privateMaterial: false)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(config)
-        let tempPath = "\(path).tmp.\(getpid())"
-        try data.write(to: URL(fileURLWithPath: tempPath), options: .atomic)
-        chmod(tempPath, 0o644)
-        if rename(tempPath, path) != 0 {
-            unlink(tempPath)
-            throw AgentError.io("failed to replace config \(path): \(String(cString: strerror(errno)))")
-        }
+        try replaceConfigFile(path: path, data: data, privateMaterial: config.agentKeyHex != nil)
     }
 
     static func runtime(from config: AgentConfig) throws -> AgentRuntime {
@@ -926,23 +935,8 @@ enum MacosAuthAgent {
     }
 
     static func validateFilePermissions(path: String, label: String, privateMaterial: Bool) throws {
-        var st = stat()
-        guard stat(path, &st) == 0 else {
-            throw AgentError.io("failed to stat \(label) \(path): \(String(cString: strerror(errno)))")
-        }
-        guard (st.st_mode & S_IFMT) == S_IFREG else {
-            throw AgentError.invalidPayload("\(label) \(path) is not a regular file")
-        }
-        let mode = st.st_mode & 0o777
-        if privateMaterial {
-            guard (mode & 0o077) == 0 else {
-                throw AgentError.invalidPayload("\(label) \(path) must not grant group/world permissions; mode is \(String(mode, radix: 8))")
-            }
-        } else {
-            guard (mode & 0o022) == 0 else {
-                throw AgentError.invalidPayload("\(label) \(path) must not be group/world writable; mode is \(String(mode, radix: 8))")
-            }
-        }
+        let fd = try openSafeFile(path: path, label: label, privateMaterial: privateMaterial)
+        close(fd)
     }
 
     static func readKeyMaterial(hex: String?, file: String?, label: String, privateMaterial: Bool) throws -> String {
@@ -955,8 +949,10 @@ enum MacosAuthAgent {
         guard let file else {
             throw AgentError.usage("missing \(label)")
         }
-        try validateFilePermissions(path: file, label: label, privateMaterial: privateMaterial)
-        let contents = try String(contentsOfFile: file, encoding: .utf8)
+        let (data, _) = try readSafeFile(path: file, label: label, privateMaterial: privateMaterial)
+        guard let contents = String(data: data, encoding: .utf8) else {
+            throw AgentError.invalidPayload("\(label) is not UTF-8")
+        }
         for rawLine in contents.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.isEmpty || line.hasPrefix("#") {
@@ -979,43 +975,34 @@ enum MacosAuthAgent {
         defer { listener.closeAndUnlink() }
 
         fputs("macos-auth-agent fake-agent listening on \(options.socketPath)\n", stderr)
-
-        while true {
-            let handle = try listener.acceptFileHandle()
-            do {
-                try handleRequest(handle: handle, hostPublicKey: hostPublicKey, agentPrivateKey: agentPrivateKey, options: options)
-            } catch {
-                fputs("macos-auth-agent fake-agent request failed: \(error)\n", stderr)
-            }
-            try? handle.close()
-            if options.once {
-                break
-            }
+        try runSocketServer(listener: listener, once: options.once) { handle, deadline in
+            try handleRequest(handle: handle, hostPublicKey: hostPublicKey, agentPrivateKey: agentPrivateKey, options: options, deadline: deadline)
         }
     }
 
-    static func handleServeRequest(handle: FileHandle, runtime: AgentRuntime) throws {
-        let request: SignedAuthRequest = try readJSONFrame(from: handle)
+    static func handleServeRequest(
+        handle: FileHandle,
+        runtime: AgentRuntime,
+        deadline: Deadline,
+        authenticator: AuthenticationCoordinator
+    ) throws {
+        let request: SignedAuthRequest = try readJSONFrame(from: handle, deadline: deadline.capped(milliseconds: 2_000))
         guard let verifier = runtime.hostVerifiers[request.body.linuxHostId] ?? runtime.hostVerifiers["*"] else {
             throw AgentError.invalidPayload("host \(request.body.linuxHostId) is not allowed")
         }
         try verifyRequest(request, hostPublicKey: verifier.publicKey, allowedFutureSkewMs: runtime.allowedFutureSkewMs)
+        let lifetime = RequestLifetime(fd: handle.fileDescriptor, expiresAtMs: request.body.expiresAtMs, connectionDeadline: deadline)
+        defer { lifetime.cancel() }
+        try lifetime.check()
         logRequestContext(request.body)
-        if !runtime.rateLimiter.allow(request.body) {
+        let authResult: AuthenticationResult
+        if runtime.rateLimiter.allow(request.body) {
+            authResult = try authenticator.evaluate(request: request.body, requireConfirmation: runtime.requireConfirmation, lifetime: lifetime)
+        } else {
             fputs("macos-auth-agent rate limit exceeded for host_id=\(request.body.linuxHostId) service=\(request.body.pamService) user=\(request.body.pamUser)\n", stderr)
-            let responseBody = try AuthResponseBody.forRequest(
-                request.body,
-                decision: "cancelled",
-                authMethod: "none",
-                nowMs: unixTimeMs(),
-                agentKeyId: runtime.agentKeyId
-            )
-            let signature = try runtime.agentPrivateKey.signature(for: Data(responseBody.canonicalBytes()))
-            let response = SignedAuthResponse(body: responseBody, signature: Array(signature))
-            try writeJSONFrame(response, to: handle)
-            return
+            authResult = AuthenticationResult(decision: .cancelled)
         }
-        let authResult = evaluateLocalAuthentication(for: request.body, requireConfirmation: runtime.requireConfirmation)
+        try lifetime.check()
         let responseBody = try AuthResponseBody.forRequest(
             request.body,
             decision: authResult.decision,
@@ -1025,18 +1012,23 @@ enum MacosAuthAgent {
         )
         let signature = try runtime.agentPrivateKey.signature(for: Data(responseBody.canonicalBytes()))
         let response = SignedAuthResponse(body: responseBody, signature: Array(signature))
-        try writeJSONFrame(response, to: handle)
+        try lifetime.check()
+        try writeJSONFrame(response, to: handle, deadline: lifetime.deadline)
     }
 
     static func handleRequest(
         handle: FileHandle,
         hostPublicKey: Curve25519.Signing.PublicKey,
         agentPrivateKey: Curve25519.Signing.PrivateKey,
-        options: FakeAgentOptions
+        options: FakeAgentOptions,
+        deadline: Deadline
     ) throws {
-        let request = try verifiedRequest(from: handle, hostPublicKey: hostPublicKey, allowedFutureSkewMs: 30_000)
+        let request = try verifiedRequest(from: handle, hostPublicKey: hostPublicKey, allowedFutureSkewMs: 30_000, deadline: deadline.capped(milliseconds: 2_000))
+        let lifetime = RequestLifetime(fd: handle.fileDescriptor, expiresAtMs: request.body.expiresAtMs, connectionDeadline: deadline)
+        defer { lifetime.cancel() }
+        try lifetime.check()
 
-        let method = options.decision == "approved" ? "biometric-or-watch" : "none"
+        let method: AuthMethod = options.decision == .approved ? .biometricOrWatch : .none
         let responseBody = try AuthResponseBody.forRequest(
             request.body,
             decision: options.decision,
@@ -1046,15 +1038,17 @@ enum MacosAuthAgent {
         )
         let signature = try agentPrivateKey.signature(for: Data(responseBody.canonicalBytes()))
         let response = SignedAuthResponse(body: responseBody, signature: Array(signature))
-        try writeJSONFrame(response, to: handle)
+        try lifetime.check()
+        try writeJSONFrame(response, to: handle, deadline: lifetime.deadline)
     }
 
     static func verifiedRequest(
         from handle: FileHandle,
         hostPublicKey: Curve25519.Signing.PublicKey,
-        allowedFutureSkewMs: UInt64
+        allowedFutureSkewMs: UInt64,
+        deadline: Deadline
     ) throws -> SignedAuthRequest {
-        let request: SignedAuthRequest = try readJSONFrame(from: handle)
+        let request: SignedAuthRequest = try readJSONFrame(from: handle, deadline: deadline)
         try verifyRequest(request, hostPublicKey: hostPublicKey, allowedFutureSkewMs: allowedFutureSkewMs)
         return request
     }
@@ -1069,47 +1063,6 @@ enum MacosAuthAgent {
             throw AgentError.invalidSignature
         }
         try request.body.verifyFreshness(nowMs: unixTimeMs(), allowedFutureSkewMs: allowedFutureSkewMs)
-    }
-
-    static func evaluateLocalAuthentication(for request: AuthRequestBody, requireConfirmation: Bool) -> (decision: String, authMethod: String) {
-        if requireConfirmation && !showConfirmationAlert(for: request) {
-            return ("cancelled", "none")
-        }
-
-        let context = LAContext()
-        context.localizedCancelTitle = "Use Linux Password"
-        context.localizedFallbackTitle = ""
-        let reason = localAuthenticationReason(for: request)
-        let policy = authenticationPolicy()
-        var canEvaluateError: NSError?
-        guard context.canEvaluatePolicy(policy, error: &canEvaluateError) else {
-            fputs("macos-auth-agent LocalAuthentication unavailable: \(canEvaluateError?.localizedDescription ?? "unknown")\n", stderr)
-            return ("unavailable", "none")
-        }
-
-        let semaphore = DispatchSemaphore(value: 0)
-        var decision = "failed"
-        context.evaluatePolicy(policy, localizedReason: reason) { success, error in
-            if success {
-                decision = "approved"
-            } else if let error = error as? LAError {
-                switch error.code {
-                case .userCancel, .systemCancel, .appCancel:
-                    decision = "cancelled"
-                case .biometryNotAvailable, .biometryNotEnrolled, .biometryLockout, .watchNotAvailable:
-                    decision = "unavailable"
-                case .authenticationFailed:
-                    decision = "failed"
-                default:
-                    decision = "failed"
-                }
-            } else {
-                decision = "failed"
-            }
-            semaphore.signal()
-        }
-        semaphore.wait()
-        return (decision, decision == "approved" ? "biometric-or-watch" : "none")
     }
 
     static func localAuthenticationReason(for request: AuthRequestBody) -> String {
@@ -1138,8 +1091,10 @@ enum MacosAuthAgent {
         )
     }
 
-    static func showConfirmationAlert(for request: AuthRequestBody) -> Bool {
-        autoreleasepool {
+    static func showConfirmationAlert(for request: AuthRequestBody, lifetime: RequestLifetime) -> Bool {
+        precondition(Thread.isMainThread)
+        guard lifetime.isActive else { return false }
+        return autoreleasepool {
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "Approve remote sudo authentication?"
@@ -1148,11 +1103,14 @@ enum MacosAuthAgent {
             alert.addButton(withTitle: "Use Linux Password")
             NSApplication.shared.setActivationPolicy(.accessory)
             NSApplication.shared.activate(ignoringOtherApps: true)
+            let timer = confirmationCancellationTimer(lifetime: lifetime) {
+                NSApplication.shared.abortModal()
+            }
+            defer { timer.invalidate() }
             let response = alert.runModal()
             alert.window.orderOut(nil)
             alert.window.close()
-            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
-            return response == .alertFirstButtonReturn
+            return lifetime.isActive && response == .alertFirstButtonReturn
         }
     }
 
@@ -1193,101 +1151,6 @@ enum MacosAuthAgent {
         }
         return .deviceOwnerAuthenticationWithBiometricsOrWatch
     }
-}
-
-final class UnixSocketListener {
-    private let fd: Int32
-    private let path: String
-
-    init(path: String) throws {
-        self.path = path
-        unlink(path)
-
-        fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        if fd < 0 {
-            throw AgentError.socket(String(cString: strerror(errno)))
-        }
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = Array(path.utf8) + [0]
-        let maxPathLength = MemoryLayout.size(ofValue: addr.sun_path)
-        guard pathBytes.count <= maxPathLength else {
-            close(fd)
-            throw AgentError.socket("path is too long for sockaddr_un")
-        }
-
-        withUnsafeMutableBytes(of: &addr.sun_path) { destination in
-            pathBytes.withUnsafeBytes { source in
-                destination.copyMemory(from: source)
-            }
-        }
-
-        let bindResult = withUnsafePointer(to: &addr) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
-                Darwin.bind(fd, sockaddrPointer, socklen_t(MemoryLayout<sa_family_t>.size + pathBytes.count))
-            }
-        }
-        if bindResult != 0 {
-            let message = String(cString: strerror(errno))
-            close(fd)
-            unlink(path)
-            throw AgentError.socket(message)
-        }
-
-        if listen(fd, 16) != 0 {
-            let message = String(cString: strerror(errno))
-            close(fd)
-            unlink(path)
-            throw AgentError.socket(message)
-        }
-    }
-
-    func acceptFileHandle() throws -> FileHandle {
-        let clientFd = accept(fd, nil, nil)
-        if clientFd < 0 {
-            throw AgentError.socket(String(cString: strerror(errno)))
-        }
-        return FileHandle(fileDescriptor: clientFd, closeOnDealloc: true)
-    }
-
-    func closeAndUnlink() {
-        close(fd)
-        unlink(path)
-    }
-}
-
-func readJSONFrame<T: Decodable>(from handle: FileHandle) throws -> T {
-    let lengthData = try readExactly(4, from: handle)
-    let length = lengthData.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
-    guard length <= maxFrameLength else {
-        throw AgentError.io("frame too large: \(length)")
-    }
-    let bodyData = try readExactly(Int(length), from: handle)
-    return try JSONDecoder().decode(T.self, from: bodyData)
-}
-
-func writeJSONFrame<T: Encodable>(_ value: T, to handle: FileHandle) throws {
-    let body = try JSONEncoder().encode(value)
-    guard body.count <= maxFrameLength else {
-        throw AgentError.io("frame too large: \(body.count)")
-    }
-    var length = UInt32(body.count).bigEndian
-    let lengthData = Data(bytes: &length, count: 4)
-    try handle.write(contentsOf: lengthData)
-    try handle.write(contentsOf: body)
-}
-
-func readExactly(_ count: Int, from handle: FileHandle) throws -> Data {
-    var data = Data()
-    while data.count < count {
-        let chunk = try handle.read(upToCount: count - data.count) ?? Data()
-        if chunk.isEmpty {
-            throw AgentError.io("unexpected EOF")
-        }
-        data.append(chunk)
-    }
-    return data
 }
 
 func storePrivateKeyInKeychain(
@@ -1349,26 +1212,14 @@ func secStatusDescription(_ status: OSStatus) -> String {
 }
 
 func writeNewFile(path: String, contents: String, mode: mode_t) throws {
-    let fd = open(path, O_WRONLY | O_CREAT | O_EXCL, mode)
+    let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode)
     guard fd >= 0 else {
         throw AgentError.io("failed to create \(path): \(String(cString: strerror(errno)))")
     }
     defer { close(fd) }
 
-    let data = Data(contents.utf8)
-    try data.withUnsafeBytes { rawBuffer in
-        guard let baseAddress = rawBuffer.baseAddress else {
-            return
-        }
-        var offset = 0
-        while offset < data.count {
-            let result = Darwin.write(fd, baseAddress.advanced(by: offset), data.count - offset)
-            if result < 0 {
-                throw AgentError.io("failed to write \(path): \(String(cString: strerror(errno)))")
-            }
-            offset += result
-        }
-    }
+    try writeAll(Data(contents.utf8), fd: fd)
+    guard fsync(fd) == 0 else { throw AgentError.io("failed to sync \(path): \(String(cString: strerror(errno)))") }
 }
 
 func hexEncode(_ bytes: [UInt8]) -> String {

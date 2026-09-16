@@ -134,7 +134,10 @@ For LocalAuthentication testing:
 agent/.build/debug/macos-auth-agent serve --config ./agent-config.json
 ```
 
-`serve` verifies the Linux request signature before showing any UI. By default it shows a confirmation alert with request context, then invokes LocalAuthentication.
+`serve` verifies the Linux request signature before showing any UI. With
+`require_confirmation=true` in the example above, it shows a confirmation alert
+before LocalAuthentication. The default is `false`, using one LocalAuthentication
+prompt with request context. Both steps are bounded by the request deadline.
 
 ## 7. Send a request with the Linux helper
 
@@ -170,11 +173,12 @@ Example SSH config:
 Host linux-with-macos-auth
     HostName linux.example.com
     User alice
-    RemoteForward /run/user/1000/macos-auth-agent.sock /Users/YOUR_MAC_USER/Library/Application Support/macos-auth/agent.sock
-    StreamLocalBindUnlink yes
+    RemoteForward /run/user/1000/macos-auth-agent.sock "/Users/YOUR_MAC_USER/Library/Application Support/macos-auth/agent.sock"
     ExitOnForwardFailure yes
 ```
 
+For reconnects, configure `StreamLocalBindUnlink yes` on the Linux SSH server,
+scoped to the intended user; see [SSH transport](ssh-transport.md).
 The Linux helper config should use the remote socket path:
 
 ```toml
@@ -194,7 +198,7 @@ allowed_future_skew_ms = 30000
 Example PAM line:
 
 ```text
-auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/local/bin/macos-auth-helper debug
+auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/bin/macos-auth-helper debug
 ```
 
 Keep a separate root shell open before editing PAM configuration.

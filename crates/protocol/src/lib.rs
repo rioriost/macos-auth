@@ -641,6 +641,68 @@ mod tests {
     }
 
     #[test]
+    fn test_vector_v1_response_enum_matrix_verifies() {
+        #[derive(serde::Deserialize)]
+        struct Vector {
+            agent_private_key_hex: String,
+            agent_public_key_hex: String,
+            request: SignedAuthRequest,
+            response: SignedAuthResponse,
+        }
+        let vector: Vector =
+            serde_json::from_str(include_str!("../../../test-vectors/v1/approval.json")).unwrap();
+        let responses: Vec<SignedAuthResponse> =
+            serde_json::from_str(include_str!("../../../test-vectors/v1/response-enums.json"))
+                .unwrap();
+        let public_key = hex::decode(vector.agent_public_key_hex).unwrap();
+        let private_key = hex::decode(vector.agent_private_key_hex).unwrap();
+        let signing_key = SigningKey::from_bytes(&private_key.try_into().unwrap());
+        assert_eq!(responses.len(), 25);
+        for decision in [
+            Decision::Approved,
+            Decision::Denied,
+            Decision::Unavailable,
+            Decision::Cancelled,
+            Decision::Failed,
+        ] {
+            for method in [
+                AuthMethod::Watch,
+                AuthMethod::TouchId,
+                AuthMethod::BiometricOrWatch,
+                AuthMethod::Unknown,
+                AuthMethod::None,
+            ] {
+                let matches: Vec<_> = responses
+                    .iter()
+                    .filter(|response| {
+                        response.body.decision == decision && response.body.auth_method == method
+                    })
+                    .collect();
+                assert_eq!(matches.len(), 1, "{decision:?}/{method:?}");
+                let response = matches[0];
+                response
+                    .verify_for_request(&vector.request.body, &public_key)
+                    .unwrap();
+                let mut expected = vector.response.body.clone();
+                expected.decision = decision;
+                expected.auth_method = method;
+                assert_eq!(
+                    expected.canonical_bytes().unwrap(),
+                    response.body.canonical_bytes().unwrap()
+                );
+                let resigned = expected.sign(&signing_key).unwrap();
+                assert_eq!(resigned.body, response.body);
+                resigned
+                    .verify_for_request(&vector.request.body, &public_key)
+                    .unwrap();
+                let round_trip: SignedAuthResponse =
+                    serde_json::from_slice(&serde_json::to_vec(response).unwrap()).unwrap();
+                assert_eq!(round_trip, *response);
+            }
+        }
+    }
+
+    #[test]
     fn response_rejects_wrong_request() {
         let agent_key = signing_key(9);
         let request = sample_request();

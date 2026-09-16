@@ -44,10 +44,18 @@ The Linux host root is trusted to protect:
 - `/etc/macos-auth/host_ed25519.key`
 - `/etc/macos-auth/config.toml`
 - `pam_macos_auth.so`
-- `/usr/local/bin/macos-auth-helper`
+- `/usr/bin/macos-auth-helper`
 - PAM configuration
 
 If Linux root is malicious, it can bypass or alter PAM behavior. The protocol still avoids exposing a generic macOS signing oracle, but it cannot make a malicious root trustworthy.
+
+PAM enforces these assumptions: it validates the executable and all ancestors
+as root-owned and non-writable by others, rejects symlinks, and executes the
+validated fd. It always passes `--require-root-owned`, causing equivalent
+config/key/replay-cache checks in the helper. Reads and replay-marker operations
+use validated descriptors rather than stat-then-reopen paths. A standalone
+development helper invocation can omit this flag; that explicitly weaker
+ownership policy is never selected automatically by PAM.
 
 ### macOS host
 
@@ -97,6 +105,7 @@ Current mitigation:
 - Response is bound to request hash and nonce.
 - Response has an expiry timestamp.
 - The helper verifies freshness.
+- Request expiry matches the helper's absolute operation deadline and is rechecked before approval.
 
 Current optional hardening:
 
@@ -182,6 +191,11 @@ Hard-fail cases:
 - malformed response
 - unsafe config permissions
 - protocol errors after connection
+
+Transport deadline expiry (including slow trickle) is an availability failure,
+not a protocol error. Truncated/malformed frames received before the deadline
+and invalid signatures for any decision remain hard failures. The independent
+PAM process deadline bounds a stuck helper; clock failure is a hard failure.
 
 ## Key management risks
 

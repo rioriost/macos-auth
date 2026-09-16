@@ -37,14 +37,19 @@ The package does not automatically create user Keychain material, host allowlist
 ## Build unsigned local package
 
 ```text
-packaging/macos/build-pkg.sh
+packaging/macos/build-pkg.sh --development --out-dir target/package/macos-dev
 ```
 
 Output:
 
 ```text
-target/package/macos/macos-auth-0.1.0-darwin-arm64.pkg
+target/package/macos-dev/macos-auth-0.1.2-darwin-arm64.pkg
 ```
+
+Development packages are unsigned and explicitly ineligible for collection.
+The script builds fresh Swift output from a recorded snapshot; `--skip-build` is
+not supported. It preserves unrelated output-directory contents and refuses
+existing package/sidecar names. Git, tar, and Python 3.9+ are required.
 
 ## Build signed package
 
@@ -59,21 +64,29 @@ packaging/macos/build-pkg.sh \
 The signed output is:
 
 ```text
-target/package/macos/macos-auth-0.1.0-darwin-arm64-signed.pkg
+target/package/macos/macos-auth-0.1.2-darwin-arm64-signed.pkg
 ```
 
 ## Notarization
 
-After building a signed package, submit and staple it:
+Signed builds require a clean committed source tree and a version matching the
+committed helper manifest. Every output includes `.metadata.json` and `.sha256`
+sidecars. Keep these alongside the package.
+
+After building a signed package, submit and staple a copy using the provenance-aware wrapper:
 
 ```text
-xcrun notarytool submit target/package/macos/macos-auth-0.1.0-darwin-arm64-signed.pkg \
+packaging/macos/notarize-pkg.sh \
+  --pkg target/package/macos/macos-auth-0.1.2-darwin-arm64-signed.pkg \
   --keychain-profile macos-auth-notary \
-  --wait
-
-xcrun stapler staple target/package/macos/macos-auth-0.1.0-darwin-arm64-signed.pkg
-spctl --assess --type install -vv target/package/macos/macos-auth-0.1.0-darwin-arm64-signed.pkg
+  --final-pkg target/package/macos/macos-auth-0.1.2-darwin-arm64.pkg \
+  --sha256-file target/package/macos/SHA256SUMS.cask
 ```
+
+The original signed package and its hashes remain unchanged. The final package's
+metadata records the stapled bytes and links to the signed input. Do not manually
+rename or staple recorded outputs; doing so invalidates provenance. Existing
+final files are refused. See [the release runbook](../../docs/release-runbook.md).
 
 Create the notary profile once with:
 
@@ -87,7 +100,7 @@ xcrun notarytool store-credentials macos-auth-notary \
 ## Local install test
 
 ```text
-sudo installer -pkg target/package/macos/macos-auth-0.1.0-darwin-arm64.pkg -target /
+sudo installer -pkg target/package/macos/macos-auth-0.1.2-darwin-arm64.pkg -target /
 /opt/homebrew/bin/macos-auth-agent --help
 pkgutil --files com.macos-auth.pkg
 sudo pkgutil --forget com.macos-auth.pkg

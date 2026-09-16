@@ -35,7 +35,8 @@ If local builder inventory is useful, keep it in `docs/build-farm.local.md`, whi
 
 ### Linux
 
-The current Linux packaging scope is Debian/Ubuntu and Fedora/RHEL-family packages on native target builders.
+The current release matrix is Ubuntu 24.04/25.10 and RHEL 9/10-family packages on
+native target builders (not arbitrary Debian or Fedora releases).
 
 | Distro family | Package manager | x86_64 | arm64/aarch64 |
 |---|---|---:|---:|
@@ -201,7 +202,7 @@ Initial cask concept:
 
 ```ruby
 cask "macos-auth" do
-  version "0.1.0"
+  version "0.1.2"
   sha256 "..."
 
   url "https://github.com/rioriost/macos-auth/releases/download/v#{version}/macos-auth-#{version}-darwin-arm64.pkg"
@@ -224,21 +225,29 @@ Open question:
 
 ## Release artifact naming
 
-Suggested release artifact names:
+Required current release artifact names:
 
 ```text
-macos-auth_0.1.0_ubuntu24.04_amd64.deb
-macos-auth_0.1.0_ubuntu25.10_amd64.deb
-macos-auth_0.1.0_ubuntu24.04_arm64.deb
-macos-auth_0.1.0_ubuntu25.10_arm64.deb
-macos-auth-0.1.0-1.rhel9.x86_64.rpm
-macos-auth-0.1.0-1.rhel10.x86_64.rpm
-macos-auth-0.1.0-1.rhel9.aarch64.rpm
-macos-auth-0.1.0-1.rhel10.aarch64.rpm
-macos-auth-darwin-arm64.pkg
+macos-auth_0.1.2_ubuntu24.04_amd64.deb
+macos-auth_0.1.2_ubuntu25.10_amd64.deb
+macos-auth_0.1.2_ubuntu24.04_arm64.deb
+macos-auth_0.1.2_ubuntu25.10_arm64.deb
+macos-auth-0.1.2-1.rhel9.x86_64.rpm
+macos-auth-0.1.2-1.rhel10.x86_64.rpm
+macos-auth-0.1.2-1.rhel9.aarch64.rpm
+macos-auth-0.1.2-1.rhel10.aarch64.rpm
+macos-auth-0.1.2-darwin-arm64.pkg
 SHA256SUMS
+SHA256SUMS-darwin-arm64
 BUILD-METADATA.txt
+BUILD-METADATA-darwin-arm64.txt
 ```
+
+Each package additionally requires its builder-supplied `.metadata.json` and
+`.sha256` sidecars. Native and container builders use the same naming rules.
+Release builds use a clean committed snapshot; collection verifies its expected
+revision/version and package hashes without inventing provenance from collector
+HEAD. See [the release runbook](release-runbook.md) for schema and exact commands.
 
 ## Validation before release
 
@@ -263,5 +272,6 @@ macOS cask artifact must be validated with:
 
 - Validate `packaging/linux/build-deb.sh` on Ubuntu arm64 and a native Debian/Ubuntu amd64 builder.
 - Validate `packaging/linux/build-rpm.sh` on RHEL-family aarch64 and x86_64 builders.
-- Add release signing. Checksum generation is implemented for x86_64 containerized Linux builds.
-- Add macOS `.pkg` build plan/script when macOS packaging sources are ready to publish.
+- Complete actual signing/notarization and install checks on the macOS builder.
+- Preserve builder provenance and record real acceptance results before promotion;
+  offline packaging tests alone are not release acceptance.

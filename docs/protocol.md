@@ -11,13 +11,51 @@ Each signed structure is encoded in a fixed field order using:
 
 This avoids relying on JSON object key ordering or cross-language serializer behavior for signatures.
 
-JSON is currently only used as a human-readable transport/debug representation for early test fixtures. The signed bytes are produced by `AuthRequestBody::canonical_bytes()` and `AuthResponseBody::canonical_bytes()` in `crates/protocol`.
+JSON is the current framed wire representation as well as a human-readable fixture
+format. JSON text is not signed directly. The signed bytes are produced by
+`AuthRequestBody::canonical_bytes()` and `AuthResponseBody::canonical_bytes()` in
+`crates/protocol`, with matching typed Swift encoders.
 
 Security invariants implemented first:
 
 - request signatures bind host id, PAM service, PAM user, tty, nonce, and validity window
 - response signatures bind request id, nonce, request hash, host id, PAM service, PAM user, decision, method, and validity window
 - response verification checks both signature validity and binding to the original request
+
+## Version 1 enum encoding
+
+Decisions are typed values: `approved`, `denied`, `unavailable`, `cancelled`, and
+`failed`. Their JSON and canonical spellings are identical.
+
+Authentication methods have one intentional wire/canonical difference:
+
+| JSON `auth_method` | Canonical signing string |
+|---|---|
+| `watch` | `watch` |
+| `touch-id` | `touchid` |
+| `biometric-or-watch` | `biometric-or-watch` |
+| `unknown` | `unknown` |
+| `none` | `none` |
+
+In particular, **do not sign the JSON spelling `touch-id` directly**. Both
+implementations reject unknown decision/method strings during typed decoding.
+The algorithm's JSON spelling is `ed25519`, while its canonical string is
+`Ed25519`. This preserves the existing v1 contract rather than changing the wire
+format or protocol version.
+
+## Request and response lifetime
+
+The signed request expiry must fit the helper's total operation deadline,
+including connection, request write, and response read (default: 15 seconds).
+The macOS agent caps each accepted connection at 15 seconds, reads its initial
+frame within two seconds, and never extends that budget on partial I/O.
+Authentication queueing and any confirmation alert use the same lifetime.
+
+The agent rejects requests at or after their expiry. It invalidates pending
+authentication on expiry or peer disconnect and checks lifetime again before
+signing/sending. Responses expire no later than the request, even when the
+ordinary ten-second response validity window would extend beyond it. Late
+authentication success cannot create a fresh approval window.
 
 ## Test vectors
 
@@ -39,6 +77,24 @@ Rust verifies the vector in `macos-auth-protocol` unit tests. Swift verifies it 
 ```text
 agent/.build/debug/macos-auth-agent verify-vector --path test-vectors/v1/approval.json
 ```
+
+`test-vectors/v1/response-enums.json` contains all 25 decision/method combinations
+as full signed response objects, bound to the same request, keys, and timestamps
+as `approval.json`. These are interoperability fixtures, not a policy assertion
+that every combination is emitted by a real authenticator. Swift's automated
+tests check the complete Cartesian set, canonical bodies, JSON round-trips, and
+signatures. The Rust protocol tests verify the same fixtures.
+
+To regenerate the enum fixture explicitly using the development key:
+
+```text
+UPDATE_PROTOCOL_VECTORS=1 swift test --package-path agent --filter AgentTests.testEveryDecisionAndMethodVector
+```
+
+CryptoKit may randomize Ed25519 signing, so regenerated signatures need not be
+byte-identical. Verification and canonical-body equality, not re-signing equality,
+are the interoperability checks. These fixed development keys must never be used
+for production authentication.
 
 ## Early helper transport
 

@@ -20,7 +20,7 @@ Problem:
 Use instead:
 
 ```text
-auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/local/bin/macos-auth-helper
+auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/bin/macos-auth-helper
 ```
 
 ### Bad: ignore all failures
@@ -37,7 +37,7 @@ Problem:
 Use instead:
 
 ```text
-auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/local/bin/macos-auth-helper
+auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/bin/macos-auth-helper
 ```
 
 ### Bad: editing `sudo` before testing with pamtester
@@ -70,13 +70,13 @@ Problem:
 Use instead:
 
 ```text
-RemoteForward /run/user/1000/macos-auth-agent.sock /Users/YOUR_MAC_USER/Library/Application Support/macos-auth/agent.sock
+RemoteForward /run/user/1000/macos-auth-agent.sock "/Users/YOUR_MAC_USER/Library/Application Support/macos-auth/agent.sock"
 ```
 
 ### Bad: no `ExitOnForwardFailure`
 
 ```text
-RemoteForward /run/user/1000/macos-auth-agent.sock /Users/alice/Library/Application Support/macos-auth/agent.sock
+RemoteForward /run/user/1000/macos-auth-agent.sock "/Users/alice/Library/Application Support/macos-auth/agent.sock"
 ```
 
 Problem:
@@ -93,7 +93,7 @@ ExitOnForwardFailure yes
 ### Bad: shared `/tmp` socket on multi-user hosts
 
 ```text
-RemoteForward /tmp/macos-auth-agent.sock /Users/alice/Library/Application Support/macos-auth/agent.sock
+RemoteForward /tmp/macos-auth-agent.sock "/Users/alice/Library/Application Support/macos-auth/agent.sock"
 ```
 
 Problem:
@@ -105,12 +105,18 @@ Problem:
 Use instead:
 
 ```text
-RemoteForward /run/user/1000/macos-auth-agent.sock /Users/alice/Library/Application Support/macos-auth/agent.sock
+RemoteForward /run/user/1000/macos-auth-agent.sock "/Users/alice/Library/Application Support/macos-auth/agent.sock"
 ```
 
 or a root-managed per-user runtime directory.
 
 ## Linux key and config permissions
+
+PAM requires root-owned files and trusted parent directories, not merely safe
+mode bits. A user-owned `0600` key or `0644` public key is still replaceable by
+that user. Install keys under `/etc/macos-auth` and update configuration paths
+to those installed copies rather than retaining references to a development
+directory.
 
 ### Bad: host private key readable by group/world
 
@@ -240,7 +246,7 @@ Problem:
 Use instead:
 
 ```text
--rwxr-xr-x root root /usr/local/bin/macos-auth-helper
+-rwxr-xr-x root root /usr/bin/macos-auth-helper
 ```
 
 ### Bad: installing without rollback path

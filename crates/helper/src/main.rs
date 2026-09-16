@@ -1,10 +1,13 @@
-use std::fs;
+mod transport;
+mod trust;
+
 use std::fs::OpenOptions;
+use std::fs::{self, File};
 use std::io::{ErrorKind, Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use ed25519_dalek::SigningKey;
@@ -15,6 +18,7 @@ use macos_auth_protocol::{
 use rand_core::{OsRng, RngCore};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use transport::{DeadlineStream, TransportError};
 
 const EXIT_APPROVED: i32 = 0;
 const EXIT_UNAVAILABLE: i32 = 10;
@@ -58,6 +62,40 @@ enum Command {
     Request(RequestArgs),
     /// Run a local fake agent for integration testing.
     FakeAgent(FakeAgentArgs),
+    /// Generate or relocate a validated TOML configuration (writes to stdout).
+    PrepareConfig(PrepareConfigArgs),
+    /// Validate a development source config and print a key path for installation.
+    ConfigKeyPath {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long, value_enum)]
+        key: ConfigKey,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ConfigKey {
+    Host,
+    Agent,
+}
+
+#[derive(Debug, Parser)]
+struct PrepareConfigArgs {
+    #[arg(long)]
+    source: Option<PathBuf>,
+    #[arg(long)]
+    socket: PathBuf,
+    #[arg(long)]
+    host_key_file: PathBuf,
+    #[arg(long)]
+    agent_pubkey_file: PathBuf,
+    #[arg(long)]
+    host_id: Option<String>,
+    #[arg(long)]
+    hostname: Option<String>,
+    /// Relocate an existing replay cache setting; does not enable it otherwise.
+    #[arg(long)]
+    replay_cache_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -86,6 +124,10 @@ struct RequestFixtureArgs {
 
 #[derive(Debug, Parser)]
 struct RequestArgs {
+    /// Require root ownership of config, keys, replay cache and all ancestors.
+    /// Always enabled by PAM; direct development requests omit this flag.
+    #[arg(long)]
+    require_root_owned: bool,
     /// TOML config file. CLI arguments override config values.
     #[arg(long)]
     config: Option<PathBuf>,
@@ -322,6 +364,30 @@ fn run() -> Result<Option<i32>, Box<dyn std::error::Error>> {
             run_fake_agent(args)?;
             Ok(None)
         }
+        Command::PrepareConfig(args) => {
+            println!("{}", prepare_config(args)?);
+            Ok(None)
+        }
+        Command::ConfigKeyPath { config, key } => {
+            let config = load_helper_config(Some(&config), false)?;
+            validate_config_fields(&config)?;
+            let host = config
+                .host_key_file
+                .as_deref()
+                .ok_or("host_key_file is required")?;
+            let agent = config
+                .agent_pubkey_file
+                .as_deref()
+                .ok_or("agent_pubkey_file is required")?;
+            load_signing_key(None, Some(host), false)?;
+            load_public_key(None, Some(agent), "agent public key", false)?;
+            let path = match key {
+                ConfigKey::Host => host,
+                ConfigKey::Agent => agent,
+            };
+            println!("{}", path.to_str().ok_or("path is not UTF-8")?);
+            Ok(None)
+        }
     }
 }
 
@@ -387,7 +453,7 @@ impl RequestFixtureArgs {
 }
 
 fn run_request(args: RequestArgs) -> Result<i32, Box<dyn std::error::Error>> {
-    let config = match load_helper_config(args.config.as_deref()) {
+    let config = match load_helper_config(args.config.as_deref(), args.require_root_owned) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("unsafe or invalid config: failed to load config: {error}");
@@ -400,24 +466,28 @@ fn run_request(args: RequestArgs) -> Result<i32, Box<dyn std::error::Error>> {
         .key_file
         .as_deref()
         .or(config.host_key_file.as_deref());
-    let signing_key =
-        match load_required_signing_key(args.key_input.key_hex.as_deref(), host_key_file) {
-            Ok(signing_key) => signing_key,
-            Err(error) => {
-                eprintln!("unsafe or invalid config: failed to load host private key: {error}");
-                return Ok(EXIT_UNSAFE_CONFIG);
-            }
-        };
+    let signing_key = match load_signing_key(
+        args.key_input.key_hex.as_deref(),
+        host_key_file,
+        args.require_root_owned,
+    ) {
+        Ok(signing_key) => signing_key,
+        Err(error) => {
+            eprintln!("unsafe or invalid config: failed to load host private key: {error}");
+            return Ok(EXIT_UNSAFE_CONFIG);
+        }
+    };
 
     let agent_pubkey_file = args
         .agent_pubkey_input
         .agent_pubkey_file
         .as_deref()
         .or(config.agent_pubkey_file.as_deref());
-    let agent_pubkey = match load_required_public_key(
+    let agent_pubkey = match load_public_key(
         args.agent_pubkey_input.agent_pubkey_hex.as_deref(),
         agent_pubkey_file,
         "agent public key",
+        args.require_root_owned,
     ) {
         Ok(agent_pubkey) => agent_pubkey,
         Err(error) => {
@@ -427,9 +497,9 @@ fn run_request(args: RequestArgs) -> Result<i32, Box<dyn std::error::Error>> {
     };
 
     let socket = match args.socket.or(config.socket_path) {
-        Some(socket) => socket,
-        None => {
-            eprintln!("unsafe or invalid config: missing socket path; provide --socket or socket_path in config");
+        Some(socket) if socket.is_absolute() => socket,
+        _ => {
+            eprintln!("unsafe or invalid config: socket path must be present and absolute");
             return Ok(EXIT_UNSAFE_CONFIG);
         }
     };
@@ -463,9 +533,33 @@ fn run_request(args: RequestArgs) -> Result<i32, Box<dyn std::error::Error>> {
         .or(config.allowed_future_skew_ms)
         .unwrap_or(30_000);
     let replay_cache_dir = args.replay_cache_dir.or(config.replay_cache_dir);
+    let replay_cache = match replay_cache_dir.as_deref() {
+        Some(path) => match trust::open(path, args.require_root_owned, true, true) {
+            Ok(directory) => Some(directory),
+            Err(error) => {
+                eprintln!("unsafe or invalid config: replay cache: {error}");
+                return Ok(EXIT_UNSAFE_CONFIG);
+            }
+        },
+        None => None,
+    };
 
     let now = unix_time_ms()?;
-    let request = build_request(
+    let (deadline, expires_at_ms) = match operation_budget(timeout_ms, now) {
+        Ok(budget) => budget,
+        Err(error) => {
+            eprintln!("unsafe or invalid config: {error}");
+            return Ok(EXIT_UNSAFE_CONFIG);
+        }
+    };
+    if [&key_id, &host_id, &hostname, &service, &args.user]
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        eprintln!("unsafe or invalid config: request identity fields must not be empty");
+        return Ok(EXIT_UNSAFE_CONFIG);
+    }
+    let mut request_body = build_request(
         now,
         RequestContext {
             key_id,
@@ -478,11 +572,11 @@ fn run_request(args: RequestArgs) -> Result<i32, Box<dyn std::error::Error>> {
             tty: args.tty,
             sudo_command: args.sudo_command,
         },
-    )?
-    .sign(&signing_key)?;
+    )?;
+    request_body.expires_at_ms = expires_at_ms;
+    let request = request_body.sign(&signing_key)?;
 
-    let timeout = Duration::from_millis(timeout_ms);
-    let mut stream = match UnixStream::connect(&socket) {
+    let mut stream = match DeadlineStream::connect(&socket, deadline) {
         Ok(stream) => stream,
         Err(error) => {
             eprintln!(
@@ -492,19 +586,16 @@ fn run_request(args: RequestArgs) -> Result<i32, Box<dyn std::error::Error>> {
             return Ok(EXIT_UNAVAILABLE);
         }
     };
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
-
     if let Err(error) = write_json_frame(&mut stream, &request) {
-        eprintln!("protocol error: failed to write request: {error}");
-        return Ok(EXIT_PROTOCOL);
+        eprintln!("failed to write request: {error}");
+        return Ok(transport_exit(&error));
     }
 
     let response: SignedAuthResponse = match read_json_frame(&mut stream) {
         Ok(response) => response,
         Err(error) => {
-            eprintln!("protocol error: failed to read response: {error}");
-            return Ok(EXIT_PROTOCOL);
+            eprintln!("failed to read response: {error}");
+            return Ok(transport_exit(&error));
         }
     };
 
@@ -514,19 +605,56 @@ fn run_request(args: RequestArgs) -> Result<i32, Box<dyn std::error::Error>> {
     }
 
     let now = unix_time_ms()?;
+    if transport::check_deadline(deadline).is_err()
+        || request
+            .body
+            .verify_freshness(now, allowed_future_skew_ms)
+            .is_err()
+    {
+        eprintln!("agent unavailable: request expired before response verification completed");
+        return Ok(EXIT_UNAVAILABLE);
+    }
     if let Err(error) = response.body.verify_freshness(now, allowed_future_skew_ms) {
         eprintln!("tamper detected: response freshness check failed: {error}");
         return Ok(EXIT_TAMPER);
     }
 
-    if let Some(replay_cache_dir) = replay_cache_dir.as_deref() {
-        if let Err(error) = record_replay_marker(replay_cache_dir, &response) {
+    if let Some(replay_cache) = replay_cache.as_ref() {
+        if let Err(error) = record_replay_marker(replay_cache, &response) {
             eprintln!("tamper detected: replay cache rejected response: {error}");
             return Ok(EXIT_TAMPER);
         }
     }
 
+    if transport::check_deadline(deadline).is_err()
+        || request
+            .body
+            .verify_freshness(unix_time_ms()?, allowed_future_skew_ms)
+            .is_err()
+    {
+        return Ok(EXIT_UNAVAILABLE);
+    }
     Ok(exit_code_for_decision(response.body.decision))
+}
+
+fn operation_budget(timeout_ms: u64, now_ms: u64) -> Result<(Instant, u64), &'static str> {
+    if timeout_ms == 0 {
+        return Err("timeout_ms must be positive");
+    }
+    let expiry = now_ms
+        .checked_add(timeout_ms)
+        .ok_or("timeout_ms overflows request expiry")?;
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(timeout_ms))
+        .ok_or("timeout_ms overflows operation deadline")?;
+    Ok((deadline, expiry))
+}
+
+fn transport_exit(error: &TransportError) -> i32 {
+    match error {
+        TransportError::Timeout => EXIT_UNAVAILABLE,
+        _ => EXIT_PROTOCOL,
+    }
 }
 
 fn run_fake_agent(args: FakeAgentArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -667,29 +795,110 @@ fn print_keypair(signing_key: &SigningKey) {
     );
 }
 
-fn load_helper_config(path: Option<&Path>) -> Result<HelperConfig, Box<dyn std::error::Error>> {
+fn read_trusted_file(
+    path: &Path,
+    root_owned: bool,
+    private: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut contents = String::new();
+    trust::open(path, root_owned, false, private)?
+        .take((MAX_FRAME_LEN + 1) as u64)
+        .read_to_string(&mut contents)?;
+    if contents.len() > MAX_FRAME_LEN {
+        return Err("trusted file is too large".into());
+    }
+    Ok(contents)
+}
+
+fn load_helper_config(
+    path: Option<&Path>,
+    root_owned: bool,
+) -> Result<HelperConfig, Box<dyn std::error::Error>> {
     let Some(path) = path else {
         return Ok(HelperConfig::default());
     };
-    validate_config_file_permissions(path)?;
-    let contents = fs::read_to_string(path)?;
+    let contents = read_trusted_file(path, root_owned, false)?;
     Ok(toml::from_str(&contents)?)
 }
 
-fn validate_config_file_permissions(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let metadata = fs::metadata(path)?;
-    if !metadata.file_type().is_file() {
-        return Err(format!("config path {} is not a regular file", path.display()).into());
+fn prepare_config(args: PrepareConfigArgs) -> Result<String, Box<dyn std::error::Error>> {
+    let mut value = match args.source.as_deref() {
+        Some(path) => toml::from_str::<toml::Table>(&read_trusted_file(path, false, false)?)?,
+        None => toml::Table::new(),
+    };
+    for (field, path) in [
+        ("socket_path", &args.socket),
+        ("host_key_file", &args.host_key_file),
+        ("agent_pubkey_file", &args.agent_pubkey_file),
+    ] {
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|part| part == std::path::Component::ParentDir)
+        {
+            return Err(format!("{field} must be absolute without parent components").into());
+        }
+        value.insert(
+            field.to_string(),
+            toml::Value::String(path.to_str().ok_or("path is not UTF-8")?.to_string()),
+        );
     }
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & 0o022 != 0 {
-        return Err(format!(
-            "config file {} must not be group/world writable; mode is {:o}",
-            path.display(),
-            mode
-        )
-        .into());
+    for (field, setting) in [("host_id", args.host_id), ("hostname", args.hostname)] {
+        if let Some(setting) = setting {
+            value.insert(field.to_string(), toml::Value::String(setting));
+        }
     }
+    if value.contains_key("replay_cache_dir") {
+        let path = args
+            .replay_cache_dir
+            .ok_or("existing replay cache requires --replay-cache-dir relocation")?;
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|part| part == std::path::Component::ParentDir)
+        {
+            return Err("replay_cache_dir must be absolute without parent components".into());
+        }
+        value.insert(
+            "replay_cache_dir".to_string(),
+            toml::Value::String(path.to_str().ok_or("path is not UTF-8")?.to_string()),
+        );
+    }
+    let contents = toml::to_string_pretty(&value)?;
+    let config: HelperConfig = toml::from_str(&contents)?;
+    validate_config_fields(&config)?;
+    Ok(contents)
+}
+
+fn validate_config_fields(config: &HelperConfig) -> Result<(), Box<dyn std::error::Error>> {
+    for (field, path) in [
+        ("socket_path", config.socket_path.as_deref()),
+        ("host_key_file", config.host_key_file.as_deref()),
+        ("agent_pubkey_file", config.agent_pubkey_file.as_deref()),
+    ] {
+        let path = path.ok_or_else(|| format!("{field} is required"))?;
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|part| part == std::path::Component::ParentDir)
+        {
+            return Err(format!("{field} must be absolute without parent components").into());
+        }
+    }
+    for (field, setting) in [
+        ("host_id", config.host_id.as_deref()),
+        ("hostname", config.hostname.as_deref()),
+        (
+            "key_id",
+            Some(config.key_id.as_deref().unwrap_or("host-key-1")),
+        ),
+        ("service", Some(config.service.as_deref().unwrap_or("sudo"))),
+    ] {
+        if setting.is_none_or(|setting| setting.trim().is_empty()) {
+            return Err(format!("{field} is required and must not be empty").into());
+        }
+    }
+    operation_budget(config.timeout_ms.unwrap_or(15_000), unix_time_ms()?)?;
     Ok(())
 }
 
@@ -709,17 +918,30 @@ fn load_required_signing_key(
     key_hex: Option<&str>,
     key_file: Option<&Path>,
 ) -> Result<SigningKey, Box<dyn std::error::Error>> {
+    load_signing_key(key_hex, key_file, false)
+}
+
+fn load_signing_key(
+    key_hex: Option<&str>,
+    key_file: Option<&Path>,
+    root_owned: bool,
+) -> Result<SigningKey, Box<dyn std::error::Error>> {
     match (key_hex, key_file) {
-        (Some(key_hex), None) => signing_key_from_hex(key_hex),
-        (None, Some(path)) => signing_key_from_file(path),
+        (Some(key_hex), None) if !root_owned => signing_key_from_hex(key_hex),
+        (Some(_), None) => {
+            Err("production requires a trusted private key file, not inline hex".into())
+        }
+        (None, Some(path)) => {
+            let material = read_key_material(path, root_owned, true)?;
+            signing_key_from_hex(&material)
+        }
         (None, None) => Err("missing private key; provide --key-hex or --key-file".into()),
         (Some(_), Some(_)) => Err("provide only one of --key-hex or --key-file".into()),
     }
 }
 
 fn signing_key_from_file(path: &Path) -> Result<SigningKey, Box<dyn std::error::Error>> {
-    validate_private_key_file_permissions(path)?;
-    let material = read_key_material(path)?;
+    let material = read_key_material(path, false, true)?;
     signing_key_from_hex(&material)
 }
 
@@ -736,12 +958,21 @@ fn load_required_public_key(
     key_file: Option<&Path>,
     label: &str,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    load_public_key(key_hex, key_file, label, false)
+}
+
+fn load_public_key(
+    key_hex: Option<&str>,
+    key_file: Option<&Path>,
+    label: &str,
+    root_owned: bool,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let material = match (key_hex, key_file) {
-        (Some(key_hex), None) => key_hex.trim().to_string(),
-        (None, Some(path)) => {
-            validate_public_key_file_permissions(path)?;
-            read_key_material(path)?
+        (Some(key_hex), None) if !root_owned => key_hex.trim().to_string(),
+        (Some(_), None) => {
+            return Err("production requires a trusted public key file, not inline hex".into())
         }
+        (None, Some(path)) => read_key_material(path, root_owned, false)?,
         (None, None) => return Err(format!("missing {label}; provide hex or file").into()),
         (Some(_), Some(_)) => return Err(format!("provide only one {label} source").into()),
     };
@@ -752,8 +983,12 @@ fn load_required_public_key(
     Ok(bytes)
 }
 
-fn read_key_material(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    let contents = fs::read_to_string(path)?;
+fn read_key_material(
+    path: &Path,
+    root_owned: bool,
+    private: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let contents = read_trusted_file(path, root_owned, private)?;
     for raw_line in contents.lines() {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -765,40 +1000,6 @@ fn read_key_material(path: &Path) -> Result<String, Box<dyn std::error::Error>> 
         return Ok(line.to_string());
     }
     Err(format!("key file {} does not contain key material", path.display()).into())
-}
-
-fn validate_private_key_file_permissions(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let metadata = fs::metadata(path)?;
-    if !metadata.file_type().is_file() {
-        return Err(format!("private key path {} is not a regular file", path.display()).into());
-    }
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        return Err(format!(
-            "private key file {} must not grant group/world permissions; mode is {:o}",
-            path.display(),
-            mode
-        )
-        .into());
-    }
-    Ok(())
-}
-
-fn validate_public_key_file_permissions(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let metadata = fs::metadata(path)?;
-    if !metadata.file_type().is_file() {
-        return Err(format!("public key path {} is not a regular file", path.display()).into());
-    }
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & 0o022 != 0 {
-        return Err(format!(
-            "public key file {} must not be group/world writable; mode is {:o}",
-            path.display(),
-            mode
-        )
-        .into());
-    }
-    Ok(())
 }
 
 fn write_private_key_file(
@@ -828,20 +1029,13 @@ fn write_public_key_file(
 }
 
 fn record_replay_marker(
-    replay_cache_dir: &Path,
+    replay_cache_dir: &File,
     response: &SignedAuthResponse,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    validate_replay_cache_dir(replay_cache_dir)?;
-    cleanup_replay_cache(replay_cache_dir)?;
+    trust::cleanup_markers(replay_cache_dir, unix_time_ms()?)?;
     let signature_hash = Sha256::digest(&response.signature);
     let marker_name = hex::encode(signature_hash);
-    let marker_path = replay_cache_dir.join(marker_name);
-    let mut file = match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&marker_path)
-    {
+    let mut file = match trust::create_marker(replay_cache_dir, &marker_name) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::AlreadyExists => {
             return Err("response replay detected".into());
@@ -852,51 +1046,14 @@ fn record_replay_marker(
     Ok(())
 }
 
-fn validate_replay_cache_dir(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let metadata = fs::metadata(path)?;
-    if !metadata.file_type().is_dir() {
-        return Err(format!("replay cache path {} is not a directory", path.display()).into());
-    }
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        return Err(format!(
-            "replay cache directory {} must not grant group/world permissions; mode is {:o}",
-            path.display(),
-            mode
-        )
-        .into());
-    }
-    Ok(())
-}
-
-fn cleanup_replay_cache(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let now = unix_time_ms()?;
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-        let contents = match fs::read_to_string(entry.path()) {
-            Ok(contents) => contents,
-            Err(_) => continue,
-        };
-        let Some(expires_at_ms) = parse_expires_at_ms(&contents) else {
-            continue;
-        };
-        if expires_at_ms < now {
-            let _ = fs::remove_file(entry.path());
-        }
-    }
-    Ok(())
-}
-
 fn parse_expires_at_ms(contents: &str) -> Option<u64> {
-    for line in contents.lines() {
-        let line = line.trim();
-        let value = line.strip_prefix("expires_at_ms=")?;
-        return value.parse::<u64>().ok();
-    }
-    None
+    contents
+        .lines()
+        .next()?
+        .trim()
+        .strip_prefix("expires_at_ms=")?
+        .parse()
+        .ok()
 }
 
 fn exit_code_for_decision(decision: Decision) -> i32 {
@@ -910,27 +1067,27 @@ fn exit_code_for_decision(decision: Decision) -> i32 {
 }
 
 fn write_json_frame<T: serde::Serialize>(
-    stream: &mut UnixStream,
+    stream: &mut impl Write,
     value: &T,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), TransportError> {
     let bytes = serde_json::to_vec(value)?;
     if bytes.len() > MAX_FRAME_LEN {
-        return Err(format!("frame too large: {} bytes", bytes.len()).into());
+        return Err(TransportError::Oversized(bytes.len()));
     }
-    let frame_len = u32::try_from(bytes.len())?;
+    let frame_len = bytes.len() as u32;
     stream.write_all(&frame_len.to_be_bytes())?;
     stream.write_all(&bytes)?;
     Ok(())
 }
 
 fn read_json_frame<T: serde::de::DeserializeOwned>(
-    stream: &mut UnixStream,
-) -> Result<T, Box<dyn std::error::Error>> {
+    stream: &mut impl Read,
+) -> Result<T, TransportError> {
     let mut len_bytes = [0_u8; 4];
     stream.read_exact(&mut len_bytes)?;
     let len = u32::from_be_bytes(len_bytes) as usize;
     if len > MAX_FRAME_LEN {
-        return Err(format!("frame too large: {len} bytes").into());
+        return Err(TransportError::Oversized(len));
     }
     let mut bytes = vec![0_u8; len];
     stream.read_exact(&mut bytes)?;
@@ -953,6 +1110,8 @@ fn unix_time_ms() -> Result<u64, Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixStream;
 
     fn write_raw_frame(stream: &mut UnixStream, payload: &[u8]) {
         let len = u32::try_from(payload.len()).unwrap();
@@ -999,7 +1158,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_micros();
-        std::env::temp_dir().join(format!("macos-auth-{label}-{}-{now}", std::process::id()))
+        PathBuf::from(format!(".test-{label}-{}-{now}", std::process::id()))
     }
 
     #[test]
@@ -1070,8 +1229,9 @@ mod tests {
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
         let response = sample_signed_response();
 
-        record_replay_marker(&dir, &response).unwrap();
-        let second = record_replay_marker(&dir, &response);
+        let directory = trust::open(&dir, false, true, true).unwrap();
+        record_replay_marker(&directory, &response).unwrap();
+        let second = record_replay_marker(&directory, &response);
         assert!(second.unwrap_err().to_string().contains("replay"));
         let _ = fs::remove_dir_all(dir);
     }
@@ -1081,9 +1241,7 @@ mod tests {
         let dir = unique_test_dir("replay-perm");
         fs::create_dir(&dir).unwrap();
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
-        let response = sample_signed_response();
-
-        let result = record_replay_marker(&dir, &response);
+        let result = trust::open(&dir, false, true, true);
         assert!(result
             .unwrap_err()
             .to_string()

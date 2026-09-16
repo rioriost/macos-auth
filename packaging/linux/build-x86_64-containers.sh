@@ -10,6 +10,7 @@ version=${VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' crates/helper/Cargo.tom
 source_ref=${SOURCE_REF:-HEAD}
 out_dir=${OUT_DIR:-target/package/x86_64-containers}
 work_dir=${WORK_DIR:-target/package/x86_64-container-work}
+provenance="$repo_root/packaging/release/artifacts.py"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -21,9 +22,8 @@ require_command() {
 prepare_source() {
   label="$1"
   src_dir="$abs_work_dir/src-$label"
-  rm -rf "$src_dir"
-  mkdir -p "$src_dir"
-  git archive "$source_ref" | tar -C "$src_dir" -xf -
+  git clone --quiet --no-local "$repo_root" "$src_dir"
+  git -C "$src_dir" checkout --quiet --detach "$commit"
   printf '%s\n' "$src_dir"
 }
 
@@ -31,26 +31,26 @@ run_ubuntu_build() {
   image="$1"
   label="$2"
   src_dir=$(prepare_source "$label")
-  artifact="macos-auth_${version}_${label}_amd64.deb"
-
   "$podman_bin" run --rm \
+    -e VERSION="$version" -e OUT_DIR=/out \
+    -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src \
     -v "$src_dir:/src:Z" \
     -v "$abs_out_dir:/out:Z" \
     "$image" \
-    sh -eu -c "export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y build-essential cargo dpkg-dev git libpam0g-dev make rustc rustfmt ca-certificates; cd /src; make check; make package-deb; cp target/package/deb/*.deb /out/$artifact; sha256sum /out/$artifact"
+    sh -eu -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y build-essential cargo dpkg-dev git libpam0g-dev make rustc rustfmt ca-certificates python3; cd /src; make check; make package-deb'
 }
 
 run_rhel_build() {
   image="$1"
   label="$2"
   src_dir=$(prepare_source "$label")
-  artifact="macos-auth-${version}-1.${label}.x86_64.rpm"
-
   "$podman_bin" run --rm \
+    -e VERSION="$version" -e OUT_DIR=/out \
+    -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src \
     -v "$src_dir:/src:Z" \
     -v "$abs_out_dir:/out:Z" \
     "$image" \
-    sh -eu -c "dnf install -y cargo gcc git make pam-devel rpm-build rust ca-certificates; cd /src; cargo test --locked; make -C pam check; sh -n scripts/check.sh; sh -n scripts/linux-dev-setup.sh; sh -n scripts/linux-install-dev.sh; sh -n packaging/linux/build-deb.sh; sh -n packaging/linux/build-rpm.sh; sh -n packaging/linux/build-x86_64-containers.sh; make package-rpm; cp target/package/rpm/*.rpm /out/$artifact; sha256sum /out/$artifact"
+    sh -eu -c 'dnf install -y cargo gcc git make pam-devel rpm-build rust ca-certificates python3; cd /src; cargo test --locked; make -C pam check; make shell-check; make package-rpm'
 }
 
 require_command "$podman_bin"
@@ -58,6 +58,7 @@ require_command git
 require_command tar
 require_command sed
 require_command sha256sum
+require_command python3
 
 case "$(uname -m)" in
   x86_64|amd64) ;;
@@ -67,22 +68,16 @@ case "$(uname -m)" in
     ;;
 esac
 
-rm -rf "$out_dir" "$work_dir"
+if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+  echo "release builds require a clean committed source tree" >&2
+  exit 1
+fi
+commit=$(git rev-parse --verify "$source_ref^{commit}")
 mkdir -p "$out_dir" "$work_dir"
 abs_out_dir=$(CDPATH= cd "$out_dir" && pwd)
-abs_work_dir=$(CDPATH= cd "$work_dir" && pwd)
-commit=$(git rev-parse --short=12 "$source_ref")
-
-cat > "$abs_out_dir/BUILD-METADATA.txt" <<EOF_META
-source_ref=$source_ref
-source_commit=$commit
-version=$version
-host_arch=$(uname -m)
-ubuntu_24_04_image=docker.io/library/ubuntu:24.04
-ubuntu_25_10_image=docker.io/library/ubuntu:25.10
-rhel_9_image=registry.access.redhat.com/ubi9/ubi:9.7
-rhel_10_image=registry.access.redhat.com/ubi10/ubi:10.1
-EOF_META
+abs_work_dir=$(python3 -B "$provenance" stage "$work_dir")
+trap 'rm -rf "$abs_work_dir"' EXIT
+trap 'exit 1' INT TERM
 
 run_ubuntu_build docker.io/library/ubuntu:24.04 ubuntu24.04
 run_ubuntu_build docker.io/library/ubuntu:25.10 ubuntu25.10
@@ -92,7 +87,7 @@ run_rhel_build registry.access.redhat.com/ubi10/ubi:10.1 rhel10
 (
   cd "$abs_out_dir"
   sha256sum *.deb *.rpm | sort > SHA256SUMS
-  chmod 0644 BUILD-METADATA.txt SHA256SUMS *.deb *.rpm
+  chmod 0644 SHA256SUMS *.deb *.rpm *.metadata.json *.sha256
   ls -l
   cat SHA256SUMS
 )

@@ -1,6 +1,9 @@
+#define _GNU_SOURCE
 #define PAM_SM_AUTH
 
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <security/pam_appl.h>
 #include <security/pam_modules.h>
 #include <signal.h>
@@ -12,6 +15,12 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#ifdef __linux__
+#include <sys/syscall.h>
+#else
+#include <libproc.h>
+#include <sys/proc_info.h>
+#endif
 #include <syslog.h>
 #include <time.h>
 #include <unistd.h>
@@ -20,7 +29,7 @@
 #define PAM_AUTHINFO_UNAVAIL PAM_AUTH_ERR
 #endif
 
-#define MACOS_AUTH_DEFAULT_HELPER "/usr/local/bin/macos-auth-helper"
+#define MACOS_AUTH_DEFAULT_HELPER "/usr/bin/macos-auth-helper"
 #define MACOS_AUTH_DEFAULT_CONFIG "/etc/macos-auth/config.toml"
 #define MACOS_AUTH_DEFAULT_TIMEOUT_MS 20000
 #define MACOS_AUTH_HELPER_TIMEOUT_EXIT 10
@@ -34,11 +43,19 @@
 #define MACOS_AUTH_EXIT_UNSAFE_CONFIG 31
 #define MACOS_AUTH_EXIT_PROTOCOL 32
 
+#ifndef MACOS_AUTH_EXECFD
+#ifdef __linux__
+#define MACOS_AUTH_EXECFD(fd, argv, envp) fexecve(fd, argv, envp)
+#else
+/* macOS can build the shim but cannot securely execute an fd. */
+#define MACOS_AUTH_EXECFD(fd, argv, envp) ((void)(fd), (void)(argv), (void)(envp), errno = ENOTSUP)
+#endif
+#endif
+
 struct macos_auth_options {
     const char *helper_path;
     const char *config_path;
     bool debug;
-    bool unsafe_allow_helper_permissions;
     unsigned int timeout_ms;
 };
 
@@ -60,7 +77,7 @@ static unsigned int parse_uint_option(const char *value, unsigned int fallback) 
     char *end = NULL;
     errno = 0;
     unsigned long parsed = strtoul(value, &end, 10);
-    if (errno != 0 || end == value || *end != '\0' || parsed > 600000UL) {
+    if (errno != 0 || end == value || *end != '\0' || parsed == 0 || parsed > 600000UL) {
         return fallback;
     }
     return (unsigned int)parsed;
@@ -70,15 +87,12 @@ static void parse_options(int argc, const char **argv, struct macos_auth_options
     options->helper_path = MACOS_AUTH_DEFAULT_HELPER;
     options->config_path = MACOS_AUTH_DEFAULT_CONFIG;
     options->debug = false;
-    options->unsafe_allow_helper_permissions = false;
     options->timeout_ms = MACOS_AUTH_DEFAULT_TIMEOUT_MS;
 
     for (int i = 0; i < argc; i++) {
         const char *arg = argv[i];
         if (strcmp(arg, "debug") == 0) {
             options->debug = true;
-        } else if (strcmp(arg, "unsafe_allow_helper_permissions") == 0) {
-            options->unsafe_allow_helper_permissions = true;
         } else if (starts_with(arg, "helper=")) {
             options->helper_path = arg + strlen("helper=");
         } else if (starts_with(arg, "conf=")) {
@@ -89,34 +103,56 @@ static void parse_options(int argc, const char **argv, struct macos_auth_options
     }
 }
 
-static int validate_helper_path(const char *helper_path, bool unsafe_allow_helper_permissions) {
+static bool trusted_metadata(const struct stat *st, bool directory) {
+    return st->st_uid == 0 && (st->st_mode & 0022) == 0 &&
+        (directory ? S_ISDIR(st->st_mode) : (S_ISREG(st->st_mode) && (st->st_mode & S_IXUSR) != 0));
+}
+
+/* Return the validated executable fd, never reopen its pathname for execution. */
+static int validate_helper_path(const char *helper_path) {
     if (helper_path == NULL || helper_path[0] != '/') {
         log_message(LOG_AUTHPRIV | LOG_ERR, "macos-auth: helper path must be absolute");
         return -1;
     }
 
+    size_t length = strlen(helper_path);
+    if (length < 2 || helper_path[length - 1] == '/') {
+        return -1;
+    }
+    char *path = strdup(helper_path);
+    if (path == NULL) {
+        return -1;
+    }
+    int fd = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     struct stat st;
-    if (stat(helper_path, &st) != 0) {
-        log_message(LOG_AUTHPRIV | LOG_ERR, "macos-auth: failed to stat helper %s: %s", helper_path, strerror(errno));
+    bool valid = fd >= 0 && fstat(fd, &st) == 0 && trusted_metadata(&st, true);
+    char *save = NULL;
+    char *component = strtok_r(path, "/", &save);
+    while (valid && component != NULL) {
+        if (strcmp(component, ".") == 0 || strcmp(component, "..") == 0) {
+            valid = false;
+            break;
+        }
+        char *next = strtok_r(NULL, "/", &save);
+        int flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK;
+        if (next != NULL) {
+            flags |= O_DIRECTORY;
+        }
+        int child = openat(fd, component, flags);
+        close(fd);
+        fd = child;
+        valid = fd >= 0 && fstat(fd, &st) == 0 && trusted_metadata(&st, next != NULL);
+        component = next;
+    }
+    free(path);
+    if (!valid) {
+        if (fd >= 0) {
+            close(fd);
+        }
+        log_message(LOG_AUTHPRIV | LOG_ERR, "macos-auth: helper and ancestors must be root-owned, non-writable, and not symlinks");
         return -1;
     }
-
-    if (!S_ISREG(st.st_mode)) {
-        log_message(LOG_AUTHPRIV | LOG_ERR, "macos-auth: helper %s is not a regular file", helper_path);
-        return -1;
-    }
-
-    if ((st.st_mode & S_IXUSR) == 0) {
-        log_message(LOG_AUTHPRIV | LOG_ERR, "macos-auth: helper %s is not executable by owner", helper_path);
-        return -1;
-    }
-
-    if (!unsafe_allow_helper_permissions && (st.st_mode & 0022) != 0) {
-        log_message(LOG_AUTHPRIV | LOG_ERR, "macos-auth: helper %s must not be group/world writable", helper_path);
-        return -1;
-    }
-
-    return 0;
+    return fd;
 }
 
 static const char *pam_item_string(pam_handle_t *pamh, int item_type) {
@@ -157,15 +193,93 @@ static int push_optional_pair(
     return push_arg(exec_argv, exec_argv_len, index, value);
 }
 
-static unsigned long monotonic_ms(void) {
+static int monotonic_ms(unsigned long long *value) {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        return 0;
+        return -1;
     }
-    return ((unsigned long)ts.tv_sec * 1000UL) + ((unsigned long)ts.tv_nsec / 1000000UL);
+    *value = ((unsigned long long)ts.tv_sec * 1000ULL) + ((unsigned long long)ts.tv_nsec / 1000000ULL);
+    return 0;
 }
 
-static int run_helper(char *const exec_argv[], unsigned int timeout_ms) {
+static int close_inherited_fds(void) {
+#ifdef __linux__
+#if defined(SYS_close_range) && !defined(MACOS_AUTH_NO_CLOSE_RANGE)
+    if (syscall(SYS_close_range, 4U, ~0U, 0U) == 0) {
+        return 0;
+    }
+#endif
+    /* Older kernels: use raw getdents64, avoiding allocation after fork. */
+    int directory = open("/proc/self/fd", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (directory < 0) {
+        return -1;
+    }
+    struct fd_entry {
+        unsigned long long ino;
+        long long offset;
+        unsigned short reclen;
+        unsigned char type;
+        char name[];
+    };
+    char buffer[4096];
+    for (;;) {
+        long count = syscall(SYS_getdents64, directory, buffer, sizeof(buffer));
+        if (count == 0) {
+            break;
+        }
+        if (count < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            close(directory);
+            return -1;
+        }
+        for (long offset = 0; offset < count;) {
+            struct fd_entry *entry = (struct fd_entry *)(buffer + offset);
+            if (entry->reclen == 0) {
+                close(directory);
+                return -1;
+            }
+            int fd = 0;
+            for (const char *digit = entry->name; *digit >= '0' && *digit <= '9'; digit++) {
+                fd = fd * 10 + (*digit - '0');
+            }
+            if (fd >= 4 && fd != directory) {
+                close(fd);
+            }
+            offset += entry->reclen;
+        }
+    }
+    close(directory);
+    return 0;
+#else
+    /* Development-only macOS build; fail closed if the list is incomplete. */
+    struct proc_fdinfo descriptors[4096];
+    int size = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, descriptors, sizeof(descriptors));
+    if (size <= 0 || (size_t)size >= sizeof(descriptors)) {
+        return -1;
+    }
+    for (size_t i = 0; i < (size_t)size / sizeof(descriptors[0]); i++) {
+        if (descriptors[i].proc_fd >= 4) {
+            close(descriptors[i].proc_fd);
+        }
+    }
+    return 0;
+#endif
+}
+
+static void kill_and_reap(pid_t pid) {
+    kill(pid, SIGKILL);
+    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {
+    }
+}
+
+static int run_helper(int helper_fd, char *const exec_argv[], unsigned int timeout_ms) {
+    unsigned long long start_ms;
+    if (timeout_ms == 0 || monotonic_ms(&start_ms) != 0) {
+        log_message(LOG_AUTHPRIV | LOG_ERR, "macos-auth: invalid timeout or monotonic clock failure");
+        return 127;
+    }
     pid_t pid = fork();
     if (pid < 0) {
         log_message(LOG_AUTHPRIV | LOG_ERR, "macos-auth: fork failed: %s", strerror(errno));
@@ -179,16 +293,17 @@ static int run_helper(char *const exec_argv[], unsigned int timeout_ms) {
             NULL,
         };
 
-        for (int fd = 3; fd < 1024; fd++) {
-            close(fd);
+        if (helper_fd != 3 && dup2(helper_fd, 3) < 0) {
+            _exit(127);
         }
-
-        execve(exec_argv[0], exec_argv, envp);
+        if (fcntl(3, F_SETFD, FD_CLOEXEC) != 0 || close_inherited_fds() != 0) {
+            _exit(127);
+        }
+        MACOS_AUTH_EXECFD(3, exec_argv, envp);
         _exit(127);
     }
 
     int status = 0;
-    unsigned long start_ms = monotonic_ms();
     for (;;) {
         pid_t waited = waitpid(pid, &status, WNOHANG);
         if (waited == pid) {
@@ -198,12 +313,21 @@ static int run_helper(char *const exec_argv[], unsigned int timeout_ms) {
             if (errno == EINTR) {
                 continue;
             }
-            log_message(LOG_AUTHPRIV | LOG_ERR, "macos-auth: waitpid failed: %s", strerror(errno));
+            int wait_error = errno;
+            log_message(LOG_AUTHPRIV | LOG_ERR, "macos-auth: waitpid failed: %s", strerror(wait_error));
+            if (wait_error != ECHILD) {
+                kill_and_reap(pid);
+            }
             return 127;
         }
 
-        unsigned long now_ms = monotonic_ms();
-        if (timeout_ms > 0 && start_ms > 0 && now_ms > start_ms && now_ms - start_ms > timeout_ms) {
+        unsigned long long now_ms;
+        if (monotonic_ms(&now_ms) != 0 || now_ms < start_ms) {
+            log_message(LOG_AUTHPRIV | LOG_ERR, "macos-auth: monotonic clock failure");
+            kill_and_reap(pid);
+            return 127;
+        }
+        if (now_ms - start_ms >= timeout_ms) {
             log_message(LOG_AUTHPRIV | LOG_ERR, "macos-auth: helper timed out after %u ms", timeout_ms);
             kill(pid, SIGTERM);
             for (int i = 0; i < 20; i++) {
@@ -211,11 +335,12 @@ static int run_helper(char *const exec_argv[], unsigned int timeout_ms) {
                 if (waited == pid) {
                     return MACOS_AUTH_HELPER_TIMEOUT_EXIT;
                 }
+                if (waited < 0 && errno == ECHILD) {
+                    return 127;
+                }
                 usleep(50000);
             }
-            kill(pid, SIGKILL);
-            while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
-            }
+            kill_and_reap(pid);
             return MACOS_AUTH_HELPER_TIMEOUT_EXIT;
         }
 
@@ -257,10 +382,6 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
     struct macos_auth_options options;
     parse_options(argc, argv, &options);
 
-    if (validate_helper_path(options.helper_path, options.unsafe_allow_helper_permissions) != 0) {
-        return PAM_AUTH_ERR;
-    }
-
     const char *service = pam_item_string(pamh, PAM_SERVICE);
     const char *ruser = pam_item_string(pamh, PAM_RUSER);
     const char *rhost = pam_item_string(pamh, PAM_RHOST);
@@ -278,6 +399,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
 
     if (push_arg(exec_argv, 24, &index, options.helper_path) != 0 ||
         push_arg(exec_argv, 24, &index, "request") != 0 ||
+        push_arg(exec_argv, 24, &index, "--require-root-owned") != 0 ||
         push_arg(exec_argv, 24, &index, "--config") != 0 ||
         push_arg(exec_argv, 24, &index, options.config_path) != 0 ||
         push_arg(exec_argv, 24, &index, "--user") != 0 ||
@@ -298,7 +420,12 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
             tty != NULL ? tty : "");
     }
 
-    int helper_exit = run_helper(exec_argv, options.timeout_ms);
+    int helper_fd = validate_helper_path(options.helper_path);
+    if (helper_fd < 0) {
+        return PAM_AUTH_ERR;
+    }
+    int helper_exit = run_helper(helper_fd, exec_argv, options.timeout_ms);
+    close(helper_fd);
     int mapped = map_exit_to_pam(helper_exit);
 
     if (options.debug) {

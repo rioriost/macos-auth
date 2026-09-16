@@ -52,7 +52,7 @@ The policy is central to the design:
 Recommended PAM control syntax:
 
 ```text
-auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/local/bin/macos-auth-helper
+auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/bin/macos-auth-helper
 ```
 
 With this syntax:
@@ -86,6 +86,17 @@ Examples:
 - LocalAuthentication prompt is not completed within PAM shim timeout.
 
 PAM shim result: helper timeout is mapped as exit `10` equivalent.
+
+The helper also returns `10` when its own absolute operation deadline expires
+(default 15000 ms, including connect/write/read). `WouldBlock`/`TimedOut` are
+availability failures, not malformed-protocol failures. Slow partial responses
+do not renew the deadline. Request expiry matches this budget; even a signed
+approval with a later response expiry cannot extend it.
+
+Malformed or truncated data received before the deadline still returns `32`;
+invalid signatures remain `30` for **all** decisions, including fallback ones.
+PAM's separate process timeout defaults to 20000 ms. Monotonic-clock failure
+is an internal hard failure, not an excuse to wait indefinitely.
 
 Rationale: This is equivalent to authenticator unavailability.
 
@@ -169,6 +180,9 @@ Examples:
 - config file is group/world writable
 - agent public key file is group/world writable
 - helper path is not safe
+- production config, keys, replay cache, helper, or any ancestor is not root-owned
+- trusted path contains a symlink or an ancestor writable by others
+- required socket path is missing/relative, or helper `timeout_ms` is zero/overflowing
 
 Helper result: `31`, or PAM shim returns `PAM_AUTH_ERR` directly.
 
@@ -208,7 +222,7 @@ This would allow tamper/unsafe-config errors to fall through to password authent
 ### Recommended
 
 ```text
-auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/local/bin/macos-auth-helper
+auth [success=done authinfo_unavail=ignore default=die] pam_macos_auth.so conf=/etc/macos-auth/config.toml helper=/usr/bin/macos-auth-helper
 ```
 
 ## Testing matrix

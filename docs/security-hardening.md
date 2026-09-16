@@ -24,18 +24,24 @@ Do not use `macos-auth` as a production authentication mechanism yet. Use only i
 - [x] private key file permission check
 - [x] public key file permission check
 - [x] config file permission check
+- [x] explicit PAM production root ownership, ancestor and no-symlink validation
+- [x] validated file descriptors for trusted reads and replay-cache updates
+- [x] absolute connect/write/read deadline; request expiry rechecked before approval
 - [x] unavailable agent maps to fallback exit code
 - [x] tamper / invalid response maps to hard-fail exit code
 - [x] integration tests for success / unavailable / unsafe config
 
 ### PAM shim
 
-- [x] no shell invocation; uses `execve`
+- [x] no shell invocation; uses Linux `fexecve` on a validated descriptor
 - [x] sanitized environment
 - [x] helper executable permission check
+- [x] root-owned helper and ancestors; no permission-bypass PAM option
+- [x] close all inherited descriptors, including those above 1023
 - [x] helper process timeout with fallback mapping
 - [x] fallback vs hard-fail exit code mapping
 - [x] syntax check through the local quality gate
+- [x] noninteractive C unit harness (`make -C pam test`); no live PAM changes
 - [x] separate `macos-auth-test` PAM service example for `pamtester`
 
 ### macOS agent
@@ -61,7 +67,7 @@ Do not use `macos-auth` as a production authentication mechanism yet. Use only i
 
 - [x] Formally specify current JSON frame transport limits. Replacement with stricter binary encoding remains a future option.
 - [ ] Add parser fuzzing for frame handling and JSON/protocol decoding. Initial cargo-fuzz skeleton and negative frame decoder tests are implemented, but sustained fuzzing is still pending.
-- [ ] Add cross-language test vectors checked by both Rust and Swift.
+- [x] Add cross-language test vectors checked by both Rust and Swift, including all 25 response decision/method combinations.
 - [x] Add replay cache or explicit replay handling strategy.
 - [x] Add clock skew tests.
 
@@ -70,7 +76,7 @@ Do not use `macos-auth` as a production authentication mechanism yet. Use only i
 - [ ] Add structured config validation with clearer diagnostics.
 - [ ] Add syslog support for PAM use.
 - [ ] Avoid leaking sensitive command args in logs.
-- [ ] Support production install paths cleanly.
+- [x] Install `/usr/bin/macos-auth-helper` and relocate config/key/replay paths.
 - [ ] Add Linux VM tests.
 
 ### PAM shim

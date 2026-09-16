@@ -44,8 +44,7 @@ socket_path = "/run/user/1000/macos-auth-agent.sock"
 Host linux-with-macos-auth
     HostName linux.example.com
     User alice
-    RemoteForward /run/user/1000/macos-auth-agent.sock /Users/YOUR_MAC_USER/Library/Application Support/macos-auth/agent.sock
-    StreamLocalBindUnlink yes
+    RemoteForward /run/user/1000/macos-auth-agent.sock "/Users/YOUR_MAC_USER/Library/Application Support/macos-auth/agent.sock"
     ExitOnForwardFailure yes
 ```
 
@@ -57,7 +56,21 @@ This is preferred because the macOS agent is reachable only through the SSH sess
 
 ### `StreamLocalBindUnlink yes`
 
-This removes a stale Linux-side Unix socket before binding a new one.
+For `RemoteForward`, this option belongs in the **Linux server's `sshd_config`**,
+not the macOS client's SSH config. The server owns the forwarding listener.
+Limit it to the intended user, for example:
+
+```text
+Match User alice
+    AllowStreamLocalForwarding remote
+    StreamLocalBindUnlink yes
+Match all
+```
+
+Validate with `sudo sshd -t` and reload the SSH service using your distribution's
+service manager. Keep the existing SSH session open until a new connection works.
+This permits the server to remove an existing socket at the requested forwarding
+path, so use a dedicated socket inside the user's runtime directory.
 
 Without it, reconnecting SSH may fail if the previous socket path remains.
 
@@ -151,7 +164,7 @@ Do not use this as the `macos-auth` transport.
 ### Bad: shared `/tmp` socket for multiple users
 
 ```text
-RemoteForward /tmp/macos-auth-agent.sock /Users/alice/Library/Application Support/macos-auth/agent.sock
+RemoteForward /tmp/macos-auth-agent.sock "/Users/alice/Library/Application Support/macos-auth/agent.sock"
 ```
 
 This can cause collisions and confusing access boundaries on multi-user systems.
@@ -159,7 +172,7 @@ This can cause collisions and confusing access boundaries on multi-user systems.
 ### Bad: no `ExitOnForwardFailure`
 
 ```text
-RemoteForward /run/user/1000/macos-auth-agent.sock /Users/alice/Library/Application Support/macos-auth/agent.sock
+RemoteForward /run/user/1000/macos-auth-agent.sock "/Users/alice/Library/Application Support/macos-auth/agent.sock"
 ```
 
 If forwarding fails, SSH may still connect. The helper will then fall back to password, which may hide deployment problems.
@@ -181,7 +194,7 @@ Check:
 
 Common causes:
 
-- stale socket path without `StreamLocalBindUnlink yes`
+- stale socket path without `StreamLocalBindUnlink yes` in the Linux `sshd_config`
 - parent directory does not exist
 - insufficient permissions to create socket
 - SSH server disables stream local forwarding

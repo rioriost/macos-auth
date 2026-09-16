@@ -7,7 +7,7 @@ cd "$repo_root"
 
 version=${VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' crates/helper/Cargo.toml | head -n 1)}
 out_dir=${OUT_DIR:-target/package/deb}
-stage_dir="$out_dir/stage"
+provenance="$repo_root/packaging/release/artifacts.py"
 control_template="packaging/linux/deb/control.in"
 
 require_command() {
@@ -25,8 +25,26 @@ require_command dpkg-deb
 require_command sed
 require_command awk
 require_command du
+require_command git
+require_command python3
+require_command tar
 
 arch=$(dpkg --print-architecture)
+distro=$(python3 -B "$provenance" distro deb)
+artifact_name=$(python3 -B "$provenance" name --version "$version" --distro "$distro" --arch "$arch")
+mkdir -p "$out_dir"
+out_dir=$(CDPATH= cd "$out_dir" && pwd)
+artifact="$out_dir/$artifact_name"
+if [ -e "$artifact" ] || [ -e "$artifact.metadata.json" ] || [ -e "$artifact.sha256" ]; then
+  echo "output already exists; use a fresh OUT_DIR: $artifact" >&2
+  exit 1
+fi
+stage_dir=$(python3 -B "$provenance" stage "$out_dir")
+trap 'rm -rf "$stage_dir"' EXIT
+trap 'exit 1' INT TERM
+source_dir=$(python3 -B "$provenance" snapshot --repo "$repo_root" --version "$version" --stage "$stage_dir")
+cd "$source_dir"
+
 if command -v dpkg-architecture >/dev/null 2>&1; then
   multiarch=$(dpkg-architecture -qDEB_HOST_MULTIARCH)
 else
@@ -41,13 +59,11 @@ else
   esac
 fi
 
-pkgroot="$stage_dir/macos-auth_${version}_${arch}"
-artifact="$out_dir/macos-auth_${version}_${arch}.deb"
+pkgroot="$stage_dir/pkgroot"
 
 cargo build --release --locked
 make -C pam
 
-rm -rf "$pkgroot"
 mkdir -p "$pkgroot/DEBIAN"
 
 install -D -m 0755 target/release/macos-auth-helper "$pkgroot/usr/bin/macos-auth-helper"
@@ -72,5 +88,7 @@ sed \
 find "$pkgroot" -type d -exec chmod 0755 {} \;
 
 dpkg-deb --build --root-owner-group "$pkgroot" "$artifact"
+python3 -B "$provenance" record --snapshot "$stage_dir/source.json" \
+  --artifact "$artifact" --distro "$distro" --arch "$arch"
 
 echo "built $artifact"

@@ -75,6 +75,10 @@ If the helper cannot connect to the socket:
 exit 10  # unavailable / password fallback
 ```
 
+The same result applies when the absolute connection/write/read deadline expires.
+Receiving bytes does not reset that deadline. A complete malformed frame or
+premature EOF remains a protocol error, not a timeout.
+
 If the helper connects but receives malformed protocol data:
 
 ```text
@@ -95,6 +99,11 @@ If the agent receives an invalid request:
 - it must not invoke LocalAuthentication
 - it may close the connection without response
 - it should log a non-sensitive error
+
+Frame reads and writes are bounded, and a disconnected client is handled without
+terminating the agent. Authentication must finish before the verified request
+expires; expiration or disconnection cancels pending UI. Responses cannot extend
+the lifetime of an expired request.
 
 ## Negative test coverage
 

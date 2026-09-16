@@ -2,12 +2,13 @@
 
 `macos-auth` は、Mac から Linux の認証要求を承認するための実験的な PAM モジュール、Linux ヘルパー、macOS ユーザーセッション agent です。
 
-この public repository には、Linux build / packaging subset、release packaging documentation、ユーザー向け setup notes が含まれています。macOS agent package は署名・notarize 済みの release asset および Homebrew cask として配布されます。macOS agent の source は、現時点ではこの public source subset には含まれていません。
+この public repository には、Rust protocol / Linux helper、C PAM module、Swift macOS agent、packaging scripts、setup documentation が含まれています。macOS agent package は署名・notarize 済みの release asset および Homebrew cask として配布されます。
 
-public な Linux 側の内容は以下です。
+主な内容は以下です。
 
 - Rust protocol / Linux helper crates
 - C PAM shim
+- Swift macOS agent と LaunchAgent setup
 - Linux package build scripts と package metadata
 - Linux testing / packaging documentation
 
@@ -133,17 +134,19 @@ agent key と config を準備し、per-user LaunchAgent は明示的に install
 ### 2. Linux package をインストールする `[Linux]`
 
 これは **Linux** で実行します。release assets から Linux distribution family と architecture に合う package を download してください。
+ソース／macOS版のみのリリースでは、そのタグからLinux packageをビルドしてください。
+古いpackageには、新しい認証処理の修正は含まれません。
 
 Ubuntu / Debian example:
 
 ```text
-sudo dpkg -i macos-auth_0.1.0_ubuntu24.04_arm64.deb
+sudo dpkg -i macos-auth_0.1.2_ubuntu24.04_arm64.deb
 ```
 
 RHEL-family example:
 
 ```text
-sudo rpm -Uvh macos-auth-0.1.0-1.rhel9.aarch64.rpm
+sudo rpm -Uvh macos-auth-0.1.2-1.rhel9.aarch64.rpm
 ```
 
 packages は helper と PAM module を install しますが、`/etc/pam.d/sudo` は変更しません。
@@ -257,12 +260,14 @@ macOS の SSH config example:
 Host linux-with-macos-auth
     HostName linux.example.com
     User alice
-    RemoteForward /run/user/1000/macos-auth-agent.sock /Users/alice/Library/Application Support/macos-auth/agent.sock
-    StreamLocalBindUnlink yes
+    RemoteForward /run/user/1000/macos-auth-agent.sock "/Users/alice/Library/Application Support/macos-auth/agent.sock"
     ExitOnForwardFailure yes
 ```
 
 `/run/user/1000` は Linux user の UID に、macOS socket path は agent config の path に合わせてください。
+再接続に備えて、**Linux server の `sshd_config`** で対象 user に
+`StreamLocalBindUnlink yes` を設定してください。macOS client 側の設定では
+Linux 側の古い socket は削除されません。[SSH transport](docs/ssh-transport.md) を参照してください。
 
 ## 使い方
 
@@ -417,6 +422,7 @@ sudo true
 | Protocol crate | `crates/protocol` | signed request / response types、canonical bytes、signature verification |
 | Linux helper | `crates/helper` | signed PAM requests を生成し、agent socket と通信し、responses を検証 |
 | PAM shim | `pam/pam_macos_auth.c` | PAM context を抽出し、helper を呼び出し、helper exit codes を PAM results に map |
+| macOS agent | `agent/` | Linux要求の検証、期限付きLocalAuthentication、応答への署名 |
 | Debian packaging | `packaging/linux/build-deb.sh`, `packaging/linux/deb/` | native `.deb` package build |
 | RPM packaging | `packaging/linux/build-rpm.sh`, `packaging/linux/rpm/` | native `.rpm` package build |
 | Linux setup helpers | `scripts/linux-*.sh` | VM testing 用 development config / install helpers |
@@ -427,13 +433,13 @@ Debian / Ubuntu builders:
 
 ```text
 sudo apt-get update
-sudo apt-get install -y build-essential cargo dpkg-dev libpam0g-dev make rustc
+sudo apt-get install -y build-essential cargo dpkg-dev libpam0g-dev make rustc python3 openssh-client
 ```
 
 Fedora / RHEL-family builders:
 
 ```text
-sudo dnf install -y cargo gcc make pam-devel rpm-build rust
+sudo dnf install -y cargo gcc make pam-devel rpm-build rust python3 openssh-clients
 ```
 
 local builders では、`rustup` による current Rust toolchain を使っても構いません。

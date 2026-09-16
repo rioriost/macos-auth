@@ -53,18 +53,15 @@ packaging/macos/build-pkg.sh \
   --pkg-sign-identity "Developer ID Installer: YOUR NAME (TEAMID)"
 ```
 
-For this project owner, the currently observed Developer ID Application identity is:
-
-```text
-Developer ID Application: Ryo Fujita (23889H77KX)
-```
-
-A matching `Developer ID Installer: Ryo Fujita (23889H77KX)` identity is also required for cask-ready `.pkg` signing.
+Use matching Application and Installer identities available to the local builder.
+Release builds require clean committed source, Git, tar, Python 3.9+, and a package
+version matching the committed helper manifest. Unsigned `--development` builds
+cannot be notarized or promoted.
 
 Expected output:
 
 ```text
-target/package/macos/macos-auth-0.1.0-darwin-arm64-signed.pkg
+target/package/macos/macos-auth-0.1.2-darwin-arm64-signed.pkg
 ```
 
 The agent binary is signed with hardened runtime before it is packaged. The installer package is then signed with the Developer ID Installer identity.
@@ -72,18 +69,25 @@ The agent binary is signed with hardened runtime before it is packaged. The inst
 ## Notarize and staple
 
 ```text
-xcrun notarytool submit target/package/macos/macos-auth-0.1.0-darwin-arm64-signed.pkg \
+packaging/macos/notarize-pkg.sh \
+  --pkg target/package/macos/macos-auth-0.1.2-darwin-arm64-signed.pkg \
   --keychain-profile macos-auth-notary \
-  --wait
-
-xcrun stapler staple target/package/macos/macos-auth-0.1.0-darwin-arm64-signed.pkg
+  --final-pkg target/package/macos/macos-auth-0.1.2-darwin-arm64.pkg \
+  --sha256-file target/package/macos/SHA256SUMS.cask
 ```
+
+The wrapper validates the signed artifact's `.metadata.json` and `.sha256`
+sidecars before submission. It staples an isolated copy, checks the ticket,
+signature, and Gatekeeper, then records the final bytes and their signed-input
+provenance. The original signed package/sidecars are not modified. Existing final
+outputs are refused; use a fresh directory for repeat builds.
 
 ## Verify
 
 ```text
-pkgutil --check-signature target/package/macos/macos-auth-0.1.0-darwin-arm64-signed.pkg
-spctl --assess --type install -vv target/package/macos/macos-auth-0.1.0-darwin-arm64-signed.pkg
+xcrun stapler validate target/package/macos/macos-auth-0.1.2-darwin-arm64.pkg
+pkgutil --check-signature target/package/macos/macos-auth-0.1.2-darwin-arm64.pkg
+spctl --assess --type install -vv target/package/macos/macos-auth-0.1.2-darwin-arm64.pkg
 ```
 
 Also verify the installed binary signature after a local install:
@@ -95,16 +99,17 @@ codesign -dv --verbose=4 /opt/homebrew/bin/macos-auth-agent
 
 ## Release asset naming
 
-For cask use, copy or rename the signed and stapled package to:
+For cask use, the wrapper writes:
 
 ```text
-macos-auth-0.1.0-darwin-arm64.pkg
+macos-auth-0.1.2-darwin-arm64.pkg
 ```
 
-Then compute:
+Use the hash in `SHA256SUMS.cask` for the cask. It can also be checked with:
 
 ```text
-shasum -a 256 macos-auth-0.1.0-darwin-arm64.pkg
+shasum -a 256 macos-auth-0.1.2-darwin-arm64.pkg
 ```
 
-Use that checksum in the cask.
+Do not manually rename or staple recorded artifacts: doing so invalidates their
+metadata/checksums. Transfer the final package and its two sidecars together.

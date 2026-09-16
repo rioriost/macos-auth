@@ -19,7 +19,11 @@ The current `serve` command is still a development implementation. It uses a JSO
 
 ```text
 swift build --package-path agent
+swift test --package-path agent
 ```
+
+Tests use disposable project-local fixtures, mock authentication, and fixed
+development keys; they do not invoke biometric UI or access Keychain.
 
 ## Fake-agent example
 
@@ -108,7 +112,41 @@ Then run:
 agent/.build/debug/macos-auth-agent serve --config ./agent-config.json
 ```
 
-`serve` verifies the request signature before showing any UI. By default it shows an explicit confirmation alert with host/user/tty/request context before invoking LocalAuthentication. If LocalAuthentication succeeds, it signs an `approved` response. If it is cancelled or unavailable, it signs a fallback-safe response decision.
+`serve` verifies the request signature before showing any UI. The optional
+confirmation alert adds host/user/tty/request context before LocalAuthentication;
+`require_confirmation` defaults to `false`, and the example above opts in. If
+LocalAuthentication succeeds within the request lifetime, the agent signs an
+`approved` response. If it is cancelled or unavailable, it signs a fallback-safe
+response decision while the request is still live.
+
+The server admits at most eight active connections, with a two-second initial
+frame-read budget and fifteen-second total connection cap. Authentication UI is
+serialized on the main thread, and queued requests retain their original signed
+expiry. Expiry or disconnect cancels pending authentication and cannot result in
+a late approval. See [LocalAuthentication notes](../docs/macos-local-authentication.md).
+
+## Socket and file safety
+
+The socket is created with mode `0600`. Its parent must be owned by the effective
+user or root and not group/world writable; a root-owned sticky directory is also
+accepted. Parent-directory symlinks are resolved (including macOS's `/tmp`
+alias), but a symlink at the socket pathname is rejected. Existing regular files,
+foreign-owned sockets, and live listeners are never unlinked. Only an owned
+socket that refuses a connection and retains its device/inode identity is treated
+as stale. Shutdown removes only the socket identity created by this listener.
+Prefer a private per-user socket directory.
+
+Config and key reads reject final-path symlinks, non-regular files, and owners
+other than the effective user or root. Public/config files must not be
+group/world writable; private key files and configs containing `agent_key_hex`
+must not grant any group/world permissions. Use mode `0600` for inline-secret
+configs (Keychain is preferable).
+
+Host-list updates use an exclusively created, initially `0600` replacement file
+in the config directory and atomically rename it after checked writes and sync.
+They preserve the original owner and permissions, narrowing inline-secret
+configs to owner-only permissions; an existing `0600` config is not widened to
+`0644`. The config directory itself must not be group/world writable.
 
 ## Host allowlist management
 
