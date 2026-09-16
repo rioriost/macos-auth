@@ -85,7 +85,7 @@ release-collect:
 
 release-verify:
 	@if [ ! -x packaging/release/verify-artifacts.sh ]; then echo "packaging/release/verify-artifacts.sh is not available in this checkout" >&2; exit 1; fi
-	packaging/release/verify-artifacts.sh --artifact-dir "$(RELEASE_DIR)" --version "$(VERSION)" --source-commit "$(SOURCE_COMMIT)" --require-macos $(RELEASE_SCOPE_FLAGS)
+	packaging/release/verify-artifacts.sh --artifact-dir "$(RELEASE_DIR)" --version "$(VERSION)" --source-commit "$(SOURCE_COMMIT)" $(if $(filter --macos-only,$(RELEASE_SCOPE_FLAGS)),,--require-macos) $(RELEASE_SCOPE_FLAGS)
 
 release-notes:
 	@if [ ! -x packaging/release/make-notes.sh ]; then echo "packaging/release/make-notes.sh is not available in this checkout" >&2; exit 1; fi

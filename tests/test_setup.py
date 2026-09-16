@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,22 @@ class SSHExamplesTests(unittest.TestCase):
                     if line.startswith("remoteforward ")
                 )
                 self.assertIn("Library/Application Support/macos-auth/agent.sock", forward)
+
+
+class ReleaseMakefileTests(unittest.TestCase):
+    def test_verification_scope_flags_are_exclusive(self):
+        for scope in ("", "--macos-only"):
+            with self.subTest(scope=scope):
+                result = subprocess.run(
+                    ["make", "-n", "release-verify", f"RELEASE_SCOPE_FLAGS={scope}",
+                     "SOURCE_COMMIT=" + "0" * 40],
+                    cwd=ROOT, capture_output=True, text=True, check=True,
+                )
+                commands = [shlex.split(line) for line in result.stdout.splitlines()
+                            if line.startswith("packaging/release/verify-artifacts.sh ")]
+                self.assertEqual(len(commands), 1)
+                self.assertEqual("--macos-only" in commands[0], bool(scope))
+                self.assertEqual("--require-macos" in commands[0], not bool(scope))
 
 
 @unittest.skipUnless(sys.platform == "darwin", "requires macOS plutil")
