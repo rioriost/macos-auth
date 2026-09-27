@@ -23,7 +23,7 @@
 
 macOS 側:
 
-- 現在の検証対象は Apple Silicon Mac
+- Apple Silicon (`arm64`) Mac のみ
 - Touch ID または Apple Watch unlock が LocalAuthentication approval に使える状態
 - OpenSSH client
 - cask で install する場合は Homebrew
@@ -33,9 +33,12 @@ Linux 側:
 - OpenSSH server
 - sudo 権限を持つ user account
 - 対応 package target:
-  - Ubuntu 24.04 / 25.10, `amd64` または `arm64`
-  - RHEL 9 / 10 family, `x86_64` または `aarch64`
+  - Ubuntu 24.04 / 25.10, `arm64` のみ
+  - RHEL 9 / 10 family, `aarch64` のみ
 - `sudo` PAM configuration を触る前に `pamtester` での検証を強く推奨
+
+source build と release package の対象は arm64/aarch64 のみです。
+Rust・Swift・PAM のコンパイルは他の architecture を拒否します。x86_64/amd64 は非対応です。
 
 安全性と recovery の前提:
 

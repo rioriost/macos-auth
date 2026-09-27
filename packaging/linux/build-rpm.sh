@@ -10,6 +10,11 @@ out_dir=${OUT_DIR:-target/package/rpm}
 provenance="$repo_root/packaging/release/artifacts.py"
 spec_template="packaging/linux/rpm/macos-auth.spec.in"
 
+case "$(uname -m)" in
+  arm64|aarch64) ;;
+  *) echo "Linux package builds require an arm64/aarch64 builder." >&2; exit 1 ;;
+esac
+
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "required command not found: $1" >&2

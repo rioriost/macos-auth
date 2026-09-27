@@ -10,6 +10,11 @@ out_dir=${OUT_DIR:-target/package/deb}
 provenance="$repo_root/packaging/release/artifacts.py"
 control_template="packaging/linux/deb/control.in"
 
+case "$(uname -m)" in
+  arm64|aarch64) ;;
+  *) echo "Linux package builds require an arm64/aarch64 builder." >&2; exit 1 ;;
+esac
+
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "required command not found: $1" >&2
@@ -48,15 +53,11 @@ cd "$source_dir"
 if command -v dpkg-architecture >/dev/null 2>&1; then
   multiarch=$(dpkg-architecture -qDEB_HOST_MULTIARCH)
 else
-  case "$arch" in
-    amd64) multiarch=x86_64-linux-gnu ;;
-    arm64) multiarch=aarch64-linux-gnu ;;
-    *)
-      echo "unable to determine Debian multiarch path for architecture: $arch" >&2
-      echo "install dpkg-dev or set up dpkg-architecture" >&2
-      exit 1
-      ;;
-  esac
+  multiarch=aarch64-linux-gnu
+fi
+if [ "$multiarch" != aarch64-linux-gnu ]; then
+  echo "unsupported Debian multiarch path: $multiarch (expected aarch64-linux-gnu)" >&2
+  exit 1
 fi
 
 pkgroot="$stage_dir/pkgroot"

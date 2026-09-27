@@ -19,17 +19,16 @@ Keep concrete hostnames, LAN IP addresses, usernames, SSH details, signing keys,
 | Ubuntu 25.10 arm64 builder | `aarch64` / `arm64` | Build and validate Ubuntu 25.10 `.deb arm64` packages |
 | RHEL 9 arm64 builder | `aarch64` | Build and validate `.rpm aarch64` packages for RHEL 9-family systems |
 | RHEL 10 arm64 builder | `aarch64` | Forward-looking `.rpm aarch64` validation |
-| Native Linux x86_64 builder | `x86_64` | Build and validate x86_64 artifacts on native hardware |
 | macOS Apple Silicon builder | `arm64` | Build signed/notarized macOS artifacts |
 
 Arch Linux is not part of the current build-farm plan.
 
 These are required roles, not proof that a reachable builder is configured.
 An absent local inventory means connectivity and credentials still need to be
-established privately. An Apple Silicon host cannot supply native x86_64
-acceptance merely because Podman is installed.
+established privately. Only arm64/aarch64 targets are supported; Podman builds
+require an arm64 Linux runtime and do not replace native PAM acceptance.
 
-For 0.1.2, build all eight Linux distro/architecture targets and notarized macOS
+For 0.1.2, build all four Linux distro/architecture targets and notarized macOS
 from one clean committed revision. Builders and collector require Git, tar, and
 Python 3.9+ in addition to their native toolchains. See the
 [release runbook](release-runbook.md) for the complete tool inventory.
@@ -47,7 +46,6 @@ Create `docs/build-farm.local.md` locally if you want to record concrete SSH tar
 | macos-auth-ubuntu-current-arm64 | Ubuntu current | arm64 | user@host | Parallels VM |
 | macos-auth-rhel9-arm64 | RHEL 9 | aarch64 | user@host | Parallels VM |
 | macos-auth-rhel10-arm64 | RHEL 10 | aarch64 | user@host | Parallels VM |
-| macos-auth-linux-x86_64 | Linux | x86_64 | user@host | Native builder |
 ```
 
 Recommended `~/.ssh/config` style:
@@ -87,9 +85,7 @@ If a builder is package-only and cannot run the full macOS/Swift checks, record 
 | Artifact | Primary builder role | Required validation |
 |---|---|---|
 | `.deb arm64` | Ubuntu LTS arm64 builder | Install, helper direct test, `pamtester`, `sudo`, rollback |
-| `.deb amd64` | Native Debian/Ubuntu x86_64 builder | Install, helper direct test, `pamtester`, `sudo`, rollback |
 | `.rpm aarch64` | RHEL 9 arm64 builder | Install, helper direct test, `pamtester`, `sudo`, rollback |
-| `.rpm x86_64` | Native RHEL-family x86_64 builder | Install, helper direct test, `pamtester`, `sudo`, rollback |
 | `darwin-arm64.pkg` | macOS Apple Silicon builder | Install, LaunchAgent load/status/unload, manual `serve`, SSH RemoteForward |
 
 ## Promotion rules
@@ -106,7 +102,7 @@ A release artifact can be promoted only after:
 8. Collection verifies version, full source commit/tree/archive digest, clean-source
    provenance, and final-byte hashes. Collector revision is recorded separately;
    mixed/outdated or undocumented-origin artifacts must be rebuilt, not relabeled.
-9. `make release-verify` passes the eight-Linux-plus-notarized-macOS gate.
+9. `make release-verify` passes the four-Linux-plus-notarized-macOS gate.
 
 ## Public-scope checklist
 

@@ -6,6 +6,7 @@ Summary:        Linux PAM helper for macOS-backed authentication approval
 License:        MIT
 URL:            https://github.com/rioriost/macos-auth
 Source0:        %{name}-%{version}.tar.gz
+ExclusiveArch:  aarch64
 
 BuildRequires:  cargo
 BuildRequires:  gcc

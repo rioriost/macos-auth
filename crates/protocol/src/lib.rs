@@ -1,3 +1,6 @@
+#[cfg(not(target_arch = "aarch64"))]
+compile_error!("macos-auth supports only arm64/aarch64 build targets");
+
 use std::convert::TryInto;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};

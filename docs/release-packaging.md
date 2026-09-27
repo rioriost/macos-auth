@@ -36,12 +36,14 @@ If local builder inventory is useful, keep it in `docs/build-farm.local.md`, whi
 ### Linux
 
 The current release matrix is Ubuntu 24.04/25.10 and RHEL 9/10-family packages on
-native target builders (not arbitrary Debian or Fedora releases).
+native arm64/aarch64 builders (not arbitrary Debian or Fedora releases).
+Other architectures, including x86_64/amd64, are not supported for source builds
+or release packages.
 
-| Distro family | Package manager | x86_64 | arm64/aarch64 |
-|---|---|---:|---:|
-| Debian / Ubuntu | `apt` / `dpkg` | `.deb` `amd64` | `.deb` `arm64` |
-| Fedora / RHEL | `dnf` / `rpm` | `.rpm` `x86_64` | `.rpm` `aarch64` |
+| Distro family | Package manager | Architecture |
+|---|---|---|
+| Ubuntu 24.04 / 25.10 | `apt` / `dpkg` | `.deb` `arm64` |
+| RHEL 9 / 10 family | `dnf` / `rpm` | `.rpm` `aarch64` |
 
 Arch packaging is deferred and is not part of the current release plan.
 
@@ -68,75 +70,32 @@ macOS package does not include Linux PAM components.
 
 ## Architecture notes
 
-### Parallels Desktop constraint
+Use arm64/aarch64 Linux guests in Parallels Desktop on Apple Silicon, or native
+arm64 Linux hardware. Rust calls this architecture `aarch64`; Swift, macOS, and
+Debian packages call it `arm64`; RPM uses `aarch64`.
 
-On Apple Silicon, Parallels Desktop should be treated as arm64/aarch64 Linux only. Do not assume x86_64 Linux VMs can run locally in Parallels.
+Rust, Swift, and PAM sources reject compilation for other architectures.
+Linux package builders reject non-arm64 hosts, and release naming, collection,
+and verification reject non-arm64 artifacts, including older x86_64 packages.
+RPM additionally declares `ExclusiveArch: aarch64`.
 
-This means local Parallels builds are ideal for:
-
-- Ubuntu `arm64`
-- RHEL-family `aarch64`
-- macOS `darwin-arm64`
-
-For Linux `x86_64`, use a native x86_64 builder. Keep the actual host inventory in local-only documentation or SSH config, not in public repository content.
-
-## Cross-compilation feasibility
-
-Cross-compilation can be useful for developer convenience, but it should not be the primary release acceptance path for PAM packages. Runtime validation still requires a target-architecture system.
-
-### Debian / Ubuntu
-
-Cross-building `.deb` packages on arm64 for `amd64` is feasible but adds complexity:
-
-- Rust target: `x86_64-unknown-linux-gnu`
-- C cross compiler: `gcc-x86-64-linux-gnu`
-- PAM dev package for target architecture: `libpam0g-dev:amd64`
-- multiarch setup: `dpkg --add-architecture amd64`
-
-However, runtime validation of PAM still requires an actual `amd64` environment.
-
-Recommendation:
-
-- Build `arm64` `.deb` in Parallels Ubuntu arm64.
-- Build `amd64` `.deb` on a native Debian/Ubuntu x86_64 builder.
-- Do not rely solely on cross-compile for release acceptance.
-
-### Fedora / RHEL
-
-Cross-building RPMs for `x86_64` on `aarch64` is possible in theory but not the simplest path for PAM modules.
-
-Complications:
-
-- target `pam-devel` availability
-- cross GCC setup
-- RPM macro differences
-- testing still requires target architecture
-
-Recommendation:
-
-- Build `aarch64` RPM in Parallels RHEL-family arm64.
-- Build `x86_64` RPM on a native RHEL-family x86_64 builder.
+Keep the actual host inventory in local-only documentation or SSH config, not in
+public repository content. Cross-compilation is not a release acceptance path;
+PAM runtime validation requires the target distro on arm64/aarch64.
 
 ## Recommended release build flow
 
-### Phase 1: native per-arch builders
-
-Use native target builders to reduce cross-toolchain complexity.
+Use native arm64/aarch64 builders to reduce cross-toolchain complexity.
 
 | Package | Recommended builder |
 |---|---|
 | `.deb arm64` | Parallels Ubuntu arm64 |
-| `.deb amd64` | Native Debian/Ubuntu x86_64 builder |
 | `.rpm aarch64` | Parallels RHEL-family aarch64 |
-| `.rpm x86_64` | Native RHEL-family x86_64 builder |
 | macOS cask artifact | macOS Apple Silicon |
 
-### Phase 2: limited cross-compile optimization
-
-After native builds are working, consider cross-compiling only where it reduces maintenance:
-
-- Debian `amd64` from arm64 may be acceptable for build artifact generation, but still test on amd64.
-- RPM cross-builds should wait until native packaging is stable.
+Alternatively, `make package-arm64-containers` builds the four Linux targets in
+Podman containers pinned to `linux/arm64`. Container builds do not replace native
+install, PAM, and rollback validation.
 
 ## Linux package install paths
 
@@ -155,12 +114,6 @@ For arm64, `<multiarch>` is usually:
 
 ```text
 aarch64-linux-gnu
-```
-
-For amd64:
-
-```text
-x86_64-linux-gnu
 ```
 
 ### Fedora / RHEL
@@ -228,12 +181,8 @@ Open question:
 Required current release artifact names:
 
 ```text
-macos-auth_0.1.2_ubuntu24.04_amd64.deb
-macos-auth_0.1.2_ubuntu25.10_amd64.deb
 macos-auth_0.1.2_ubuntu24.04_arm64.deb
 macos-auth_0.1.2_ubuntu25.10_arm64.deb
-macos-auth-0.1.2-1.rhel9.x86_64.rpm
-macos-auth-0.1.2-1.rhel10.x86_64.rpm
 macos-auth-0.1.2-1.rhel9.aarch64.rpm
 macos-auth-0.1.2-1.rhel10.aarch64.rpm
 macos-auth-0.1.2-darwin-arm64.pkg
@@ -270,8 +219,8 @@ macOS cask artifact must be validated with:
 
 ## Next packaging tasks
 
-- Validate `packaging/linux/build-deb.sh` on Ubuntu arm64 and a native Debian/Ubuntu amd64 builder.
-- Validate `packaging/linux/build-rpm.sh` on RHEL-family aarch64 and x86_64 builders.
+- Validate `packaging/linux/build-deb.sh` on Ubuntu 24.04 and 25.10 arm64 builders.
+- Validate `packaging/linux/build-rpm.sh` on RHEL 9/10-family aarch64 builders.
 - Complete actual signing/notarization and install checks on the macOS builder.
 - Preserve builder provenance and record real acceptance results before promotion;
   offline packaging tests alone are not release acceptance.

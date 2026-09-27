@@ -11,7 +11,7 @@ NOTARY_PROFILE ?= macos-auth-notary
 MACOS_SIGNED_PKG ?= target/package/macos/macos-auth-$(VERSION)-darwin-arm64-signed.pkg
 MACOS_FINAL_PKG ?= target/package/macos/macos-auth-$(VERSION)-darwin-arm64.pkg
 
-.PHONY: all build test check fmt rust-build rust-test pam-build pam-check pam-e2e swift-build swift-test python-test shell-check package-deb package-rpm package-x86_64-containers package-macos package-macos-signed notarize-macos release-collect release-verify release-notes release-upload-draft release-status clean
+.PHONY: all build test check fmt rust-build rust-test pam-build pam-check pam-e2e swift-build swift-test python-test shell-check package-deb package-rpm package-arm64-containers package-macos package-macos-signed notarize-macos release-collect release-verify release-notes release-upload-draft release-status clean
 
 all: check
 
@@ -61,8 +61,8 @@ package-deb:
 package-rpm:
 	packaging/linux/build-rpm.sh
 
-package-x86_64-containers:
-	packaging/linux/build-x86_64-containers.sh
+package-arm64-containers:
+	packaging/linux/build-arm64-containers.sh
 
 package-macos:
 	@if [ ! -x packaging/macos/build-pkg.sh ]; then echo "packaging/macos/build-pkg.sh is not available in this checkout" >&2; exit 1; fi

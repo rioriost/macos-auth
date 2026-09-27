@@ -16,7 +16,7 @@ case "$release_scope" in
 
 This release contains the source at \`$source_commit\` and a signed, notarized
 Apple Silicon macOS agent package. **No Linux binary packages are included.**
-Linux package builds and the full eight-target Linux release gate have not been
+Linux package builds and the full four-target Linux release gate have not been
 completed for this release. This is an explicit limited-scope release, not a
 successful full package release.
 
@@ -52,7 +52,8 @@ esac
 cat > "$out_file" <<EOF
 # macos-auth v$version package draft
 
-This draft release contains Linux packages and a signed/notarized macOS agent package.
+This draft release contains arm64/aarch64 Linux packages and a signed/notarized
+Apple Silicon macOS agent package. x86_64/amd64 builds are not supported.
 
 Status: development-only. Do not use this as a production authentication mechanism yet.
 
@@ -62,16 +63,12 @@ Source commit: \`$source_commit\`
 
 ### Debian / Ubuntu
 
-- \`macos-auth_${version}_ubuntu24.04_amd64.deb\`
 - \`macos-auth_${version}_ubuntu24.04_arm64.deb\`
-- \`macos-auth_${version}_ubuntu25.10_amd64.deb\`
 - \`macos-auth_${version}_ubuntu25.10_arm64.deb\`
 
 ### RHEL-family
 
-- \`macos-auth-${version}-1.rhel9.x86_64.rpm\`
 - \`macos-auth-${version}-1.rhel9.aarch64.rpm\`
-- \`macos-auth-${version}-1.rhel10.x86_64.rpm\`
 - \`macos-auth-${version}-1.rhel10.aarch64.rpm\`
 
 ### macOS
@@ -81,7 +78,7 @@ Source commit: \`$source_commit\`
 ## Validation checklist
 
 - [ ] \`make check\` passed on supported native Linux builders.
-- [ ] x86_64 packages built in clean Podman containers.
+- [ ] arm64/aarch64 packages built from clean source for all four Linux targets.
 - [ ] Install/uninstall smoke tests passed for all Linux artifacts.
 - [ ] PAM integration smoke tests passed for all Linux artifacts.
 - [ ] Manual macOS agent end-to-end smoke passed over SSH \`RemoteForward\`.

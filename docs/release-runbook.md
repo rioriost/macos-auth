@@ -6,7 +6,7 @@ Current release preparation targets **0.1.2**. Published releases, including
 ## Prerequisites and release source
 
 - Commit the complete release source and matching Cargo package versions before
-  building. All nine artifacts must come from that exact full commit SHA.
+  building. All five artifacts must come from that exact full commit SHA.
 - Builders and the collector require Git, tar, and Python 3.9+ (standard library
   only). The collector must have the source commit locally to verify its version,
   Git tree, and archive digest; its own HEAD may differ and is recorded separately.
@@ -14,8 +14,10 @@ Current release preparation targets **0.1.2**. Published releases, including
   PAM development headers, and dpkg/dpkg-deb/dpkg-architecture.
 - Native RHEL 9/10-family builders require Rust/Cargo, make, GCC, PAM development
   headers, rpm, and rpmbuild. These scripts do not support Fedora release artifacts.
-- An x86_64 Linux host with Podman can build the four x86_64 targets in Ubuntu
-  and UBI containers; it does not supply the four native arm64 acceptance results.
+- All build targets are arm64/aarch64 only. An arm64/aarch64 host with Podman and
+  an arm64 Linux runtime can build the four Linux targets in Ubuntu and UBI
+  containers; this does not replace native PAM acceptance. The container wrapper
+  also requires `sha256sum` (GNU coreutils).
 - Apple Silicon macOS requires the committed `agent/` and LaunchAgent sources,
   Swift/Xcode command-line tools, `pkgbuild`, `productbuild`, `codesign`,
   `pkgutil`, `spctl`, and `xcrun` with `notarytool`/`stapler`. Distribution also
@@ -53,20 +55,20 @@ make check
 VERSION=0.1.2 packaging/linux/build-rpm.sh
 ```
 
-On the x86_64 Podman builder:
+On the arm64/aarch64 Podman builder:
 
 ```sh
-VERSION=0.1.2 SOURCE_REF="$SOURCE_COMMIT" packaging/linux/build-x86_64-containers.sh
+VERSION=0.1.2 SOURCE_REF="$SOURCE_COMMIT" packaging/linux/build-arm64-containers.sh
 ```
 
 OS and architecture are detected on the builder. Both native and container paths
 produce identical canonical names:
 
 ```text
-macos-auth_0.1.2_ubuntu24.04_{amd64,arm64}.deb
-macos-auth_0.1.2_ubuntu25.10_{amd64,arm64}.deb
-macos-auth-0.1.2-1.rhel9.{x86_64,aarch64}.rpm
-macos-auth-0.1.2-1.rhel10.{x86_64,aarch64}.rpm
+macos-auth_0.1.2_ubuntu24.04_arm64.deb
+macos-auth_0.1.2_ubuntu25.10_arm64.deb
+macos-auth-0.1.2-1.rhel9.aarch64.rpm
+macos-auth-0.1.2-1.rhel10.aarch64.rpm
 ```
 
 Each artifact has `<artifact>.metadata.json` and `<artifact>.sha256` sidecars.
@@ -119,9 +121,8 @@ Use local directories and/or scp-compatible remote builder directories:
 packaging/release/collect-artifacts.sh \
   --version 0.1.2 --source-commit "$SOURCE_COMMIT" \
   --out-dir target/package/release --clean \
-  --source target/package/x86_64-containers \
-  --source target/package/macos \
-  --source builder-alias:/path/to/arm64-artifacts
+  --source target/package/arm64-containers \
+  --source target/package/macos
 packaging/release/verify-artifacts.sh \
   --version 0.1.2 --source-commit "$SOURCE_COMMIT" \
   --artifact-dir target/package/release --require-macos
@@ -133,7 +134,8 @@ whitespace; use repeated `--source` arguments for paths containing spaces.
 
 Collection preserves the original per-artifact sidecar bytes. It rejects missing
 metadata/checksums, changed bytes, wrong source revisions/trees/archives, mismatched
-versions, development/unsigned artifacts, and conflicting duplicate names.
+versions, development/unsigned artifacts, unsupported architectures, and
+conflicting duplicate names.
 Identical duplicates are allowed; distinct builder records are conflicts even
 when the package hashes happen to agree. Remote retrieval errors are fatal.
 `--clean` removes only known release outputs, retaining unrelated files and edited
@@ -143,9 +145,10 @@ release notes, and never recursively deletes the output directory.
 collection indexes. They distinguish `source.source_commit` from
 `collector.revision`/`collector.dirty` and pin every builder sidecar by SHA256.
 `SHA256SUMS` covers all Linux packages; `SHA256SUMS-darwin-arm64` covers macOS.
-Verification requires **all eight Linux packages**, and the normal release target
-additionally requires notarized macOS. On macOS it also reruns stapler, signature,
-and Gatekeeper checks. Hash/provenance checks are not package install or PAM tests.
+Verification requires **all four arm64/aarch64 Linux packages**, and the normal
+release target additionally requires notarized macOS. On macOS it also reruns
+stapler, signature, and Gatekeeper checks. Hash/provenance checks are not package
+install or PAM tests.
 
 These records are integrity/provenance manifests from trusted builders, not
 cryptographically signed attestations. Protect builder access and the transport.
@@ -156,7 +159,7 @@ Old artifacts without provenance must be rebuilt; do not backfill their origin.
 If Linux builders are unavailable, a release owner may explicitly choose a
 source + macOS-only release, as with the published 0.1.1 macOS-only rebuild.
 This is **not** an automatic fallback or a successful full-matrix release.
-The normal `make release-verify` and draft-upload defaults still require all eight
+The normal `make release-verify` and draft-upload defaults still require all four
 Linux packages plus notarized macOS.
 
 Build/sign/notarize the macOS package from the clean committed release source as
@@ -206,8 +209,8 @@ make release-upload-draft VERSION=0.1.2 RELEASE_TAG=v0.1.2 \
   SOURCE_COMMIT="$SOURCE_COMMIT" RELEASE_REPO=rioriost/macos-auth
 ```
 
-By default, upload independently runs the full nine-package verification gate. It queries
-`isDraft` before any mutation and refuses published releases. A failed query is not
+By default, upload independently runs the full five-package verification gate.
+It queries `isDraft` before any mutation and refuses published releases. A failed query is not
 interpreted as absence: creation requires a successful complete release listing
 that confirms the tag is missing. Auth, network, and ambiguous query failures stop
 the upload. Existing draft assets may be replaced with `--clobber`.

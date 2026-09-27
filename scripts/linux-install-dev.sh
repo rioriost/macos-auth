@@ -81,6 +81,11 @@ case "$socket_path" in
   *) echo "--socket-path must be absolute" >&2; exit 2 ;;
 esac
 
+case "$(uname -m)" in
+  arm64|aarch64) ;;
+  *) echo "Linux installation requires arm64/aarch64." >&2; exit 1 ;;
+esac
+
 if [ "$(id -u)" -ne 0 ]; then
   echo "This installer must be run as root." >&2
   exit 1
@@ -105,8 +110,6 @@ fi
 if [ -z "$pam_dir" ]; then
   if [ -d /lib/aarch64-linux-gnu/security ]; then
     pam_dir=/lib/aarch64-linux-gnu/security
-  elif [ -d /lib/x86_64-linux-gnu/security ]; then
-    pam_dir=/lib/x86_64-linux-gnu/security
   elif [ -d /lib64/security ]; then
     pam_dir=/lib64/security
   elif [ -d /lib/security ]; then

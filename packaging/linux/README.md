@@ -1,12 +1,11 @@
 # Linux packaging
 
-Linux release packaging targets Ubuntu 24.04/25.10 and RHEL 9/10-family packages built on native target builders.
+Linux release packaging targets Ubuntu 24.04/25.10 and RHEL 9/10-family packages
+built on native arm64/aarch64 builders. x86_64/amd64 is not supported.
 
 | Package | Architecture |
 |---|---:|
-| `.deb` | `amd64` |
 | `.deb` | `arm64` |
-| `.rpm` | `x86_64` |
 | `.rpm` | `aarch64` |
 
 Arch packaging is deferred.
@@ -55,24 +54,27 @@ source commit/tree/archive digest, exact input snapshot, and final package hash.
 Keep all three files together when transferring them to the collector.
 See [the release runbook](../../docs/release-runbook.md) for collection and gates.
 
-## x86_64 containerized build
+## arm64 containerized build
 
-On an x86_64 host with Podman, build all current x86_64 Linux package targets in clean containers:
+On an arm64/aarch64 host with Podman and an arm64 Linux runtime, build all four
+Linux package targets in clean containers:
 
 ```text
-packaging/linux/build-x86_64-containers.sh
+make package-arm64-containers
 ```
 
 This builds:
 
-- Ubuntu 24.04 `amd64` `.deb`
-- Ubuntu 25.10 `amd64` `.deb`
-- RHEL 9-family `x86_64` `.rpm` using UBI 9.7
-- RHEL 10-family `x86_64` `.rpm` using UBI 10.1
+- Ubuntu 24.04 `arm64` `.deb`
+- Ubuntu 25.10 `arm64` `.deb`
+- RHEL 9-family `aarch64` `.rpm` using UBI 9.7
+- RHEL 10-family `aarch64` `.rpm` using UBI 10.1
 
 Artifacts, their per-artifact sidecars, and `SHA256SUMS` are written to
-`target/package/x86_64-containers/`. Names and provenance are produced by the same
-native builder scripts, not renamed by the container wrapper.
+`target/package/arm64-containers/`. The wrapper
+`packaging/linux/build-arm64-containers.sh` explicitly selects `linux/arm64`.
+Names and provenance are produced by the same native builder scripts, not
+renamed by the container wrapper.
 
 The script clones the committed git ref, `HEAD` by default, into isolated staging.
 Set `SOURCE_REF` to another commit containing these provenance-aware scripts, and

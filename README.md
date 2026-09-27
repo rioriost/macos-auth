@@ -23,7 +23,7 @@ You need two machines or VMs:
 
 On macOS:
 
-- Apple Silicon Mac is the currently tested target
+- Apple Silicon (`arm64`) Mac only
 - Touch ID or Apple Watch unlock configured for LocalAuthentication approval
 - OpenSSH client
 - Homebrew, if installing through the cask
@@ -33,9 +33,12 @@ On Linux:
 - OpenSSH server
 - a user account with sudo access
 - a supported package target:
-  - Ubuntu 24.04 / 25.10, `amd64` or `arm64`
-  - RHEL 9 / 10 family, `x86_64` or `aarch64`
+  - Ubuntu 24.04 / 25.10, `arm64` only
+  - RHEL 9 / 10 family, `aarch64` only
 - `pamtester` is strongly recommended before touching `sudo` PAM configuration
+
+All source builds and release packages target arm64/aarch64 only. Rust, Swift,
+and PAM compilation reject other architectures; x86_64/amd64 is not supported.
 
 Security and recovery prerequisites:
 

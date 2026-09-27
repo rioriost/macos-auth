@@ -1,6 +1,10 @@
 #define _GNU_SOURCE
 #define PAM_SM_AUTH
 
+#if !defined(__aarch64__)
+#error "macos-auth supports only arm64/aarch64 build targets"
+#endif
+
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>

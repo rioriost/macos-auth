@@ -2,7 +2,8 @@
 
 This document describes manual end-to-end testing in Linux VMs, with Parallels Desktop as the assumed VM platform.
 
-Important Parallels Desktop constraint on Apple Silicon Macs: assume **arm64/aarch64 Linux guests only**. Do not use x86_64-specific package assumptions or PAM module paths without checking the VM.
+Only **arm64/aarch64 Linux targets** are supported. Use arm64/aarch64 guests in
+Parallels Desktop on Apple Silicon Macs.
 
 The goal is to validate real PAM, `sudo`, SSH `RemoteForward`, fallback behavior, and hard-fail behavior on common Linux distributions.
 
@@ -113,7 +114,7 @@ PAM module directory on arm64 Debian/Ubuntu is usually:
 /lib/aarch64-linux-gnu/security
 ```
 
-On x86_64 Linux it is often `/lib/x86_64-linux-gnu/security`, but Parallels Desktop on Apple Silicon should use arm64/aarch64 guests.
+Use the actual arm64/aarch64 module directory for the guest distribution.
 
 PAM stack names:
 
@@ -438,7 +439,7 @@ sudo rm -rf /etc/macos-auth
 Remove the PAM module from the module directory if desired:
 
 ```text
-sudo rm -f /lib/x86_64-linux-gnu/security/pam_macos_auth.so
+sudo rm -f /lib/aarch64-linux-gnu/security/pam_macos_auth.so
 sudo rm -f /lib64/security/pam_macos_auth.so
 sudo rm -f /usr/lib/security/pam_macos_auth.so
 ```

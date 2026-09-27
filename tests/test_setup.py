@@ -33,6 +33,18 @@ class SSHExamplesTests(unittest.TestCase):
 
 
 class ReleaseMakefileTests(unittest.TestCase):
+    def test_container_target_is_arm64_only(self):
+        result = subprocess.run(
+            ["make", "-n", "package-arm64-containers"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        )
+        self.assertIn("packaging/linux/build-arm64-containers.sh", result.stdout)
+        result = subprocess.run(
+            ["make", "-n", "package-x86_64-containers"],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+
     def test_verification_scope_flags_are_exclusive(self):
         for scope in ("", "--macos-only"):
             with self.subTest(scope=scope):
@@ -46,6 +58,99 @@ class ReleaseMakefileTests(unittest.TestCase):
                 self.assertEqual(len(commands), 1)
                 self.assertEqual("--macos-only" in commands[0], bool(scope))
                 self.assertEqual("--require-macos" in commands[0], not bool(scope))
+
+
+class ArchitectureTests(unittest.TestCase):
+    def test_container_builds_pin_arm64_for_all_four_images(self):
+        with tempfile.TemporaryDirectory(prefix="macos-auth-containers-") as directory:
+            base = Path(directory)
+            tools = base / "bin"
+            tools.mkdir()
+            log = base / "podman.jsonl"
+            scripts = {
+                "uname": 'printf "%s\\n" "$TEST_ARCH"',
+                "git": 'case "$1" in rev-parse) printf "%s\\n" "HEAD" ;; esac',
+                "sha256sum": "exit 0",
+            }
+            for name, source in scripts.items():
+                tool = tools / name
+                tool.write_text("#!/bin/sh\n" + source + "\n")
+                tool.chmod(0o700)
+            podman = tools / "podman"
+            podman.write_text(f"#!{sys.executable}\n" + """
+import json, os, pathlib, sys
+args = sys.argv[1:]
+with open(os.environ["PODMAN_LOG"], "a") as output:
+    output.write(json.dumps(args) + "\\n")
+mount = next(arg for arg in args if arg.endswith(":/out:Z"))
+out = pathlib.Path(mount.removesuffix(":/out:Z"))
+extension = ".deb" if "ubuntu:" in " ".join(args) else ".rpm"
+name = "fixture-" + str(len(list(out.glob("*" + extension)))) + extension
+for suffix in ("", ".metadata.json", ".sha256"):
+    (out / (name + suffix)).write_text("offline container invocation fixture")
+""")
+            podman.chmod(0o700)
+            for arch in ("arm64", "aarch64"):
+                with self.subTest(arch=arch):
+                    log.unlink(missing_ok=True)
+                    work = base / f"work-{arch}"
+                    result = subprocess.run(
+                        ["sh", "packaging/linux/build-arm64-containers.sh"], cwd=ROOT,
+                        capture_output=True, text=True, env={
+                            **os.environ, "PATH": f"{tools}:{os.environ['PATH']}",
+                            "PODMAN": str(podman), "PODMAN_LOG": str(log),
+                            "TEST_ARCH": arch, "OUT_DIR": str(base / f"out-{arch}"),
+                            "WORK_DIR": str(work),
+                        },
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    calls = [json.loads(line) for line in log.read_text().splitlines()]
+                    images = (
+                        "docker.io/library/ubuntu:24.04", "docker.io/library/ubuntu:25.10",
+                        "registry.access.redhat.com/ubi9/ubi:9.7",
+                        "registry.access.redhat.com/ubi10/ubi:10.1",
+                    )
+                    self.assertEqual(len(calls), len(images))
+                    for call, image in zip(calls, images):
+                        self.assertEqual(call[:4], ["run", "--rm", "--platform", "linux/arm64"])
+                        self.assertIn(image, call)
+                    self.assertEqual(list(work.iterdir()), [])
+
+    def test_linux_builders_and_installer_reject_unsupported_hosts(self):
+        with tempfile.TemporaryDirectory(prefix="macos-auth-arch-") as directory:
+            base = Path(directory)
+            uname = base / "uname"
+            uname.write_text('#!/bin/sh\nprintf "%s\\n" "$TEST_ARCH"\n')
+            uname.chmod(0o700)
+            env = {**os.environ, "PATH": f"{base}:{os.environ['PATH']}"}
+            commands = (
+                ["packaging/linux/build-deb.sh"],
+                ["packaging/linux/build-rpm.sh"],
+                ["packaging/linux/build-arm64-containers.sh"],
+                ["scripts/linux-install-dev.sh", "--dev-dir", str(base)],
+            )
+            for arch in ("x86_64", "amd64", "armv7l"):
+                for command in commands:
+                    with self.subTest(arch=arch, command=command):
+                        result = subprocess.run(
+                            ["sh", *command], cwd=ROOT, env={**env, "TEST_ARCH": arch},
+                            capture_output=True, text=True,
+                        )
+                        self.assertEqual(result.returncode, 1, result.stderr)
+                        self.assertIn("arm64/aarch64", result.stderr)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS cross-compilers")
+    def test_swift_and_pam_reject_x86_64_targets(self):
+        commands = (
+            ["swiftc", "-typecheck", "-target", "x86_64-apple-macosx13.0",
+             *map(str, sorted((ROOT / "agent/Sources/MacosAuthAgent").glob("*.swift")))],
+            ["cc", "-arch", "x86_64", "-fsyntax-only", "pam/pam_macos_auth.c"],
+        )
+        for command in commands:
+            with self.subTest(compiler=command[0]):
+                result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("macos-auth supports only arm64/aarch64 build targets", result.stderr)
 
 
 @unittest.skipUnless(sys.platform == "darwin", "requires macOS plutil")

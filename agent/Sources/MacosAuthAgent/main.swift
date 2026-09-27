@@ -1,3 +1,7 @@
+#if !arch(arm64)
+#error("macos-auth supports only arm64/aarch64 build targets")
+#endif
+
 import AppKit
 import CryptoKit
 import Darwin

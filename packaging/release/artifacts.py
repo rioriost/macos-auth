@@ -18,10 +18,10 @@ ROOT = Path(__file__).resolve().parents[2]
 VERSION = "0.1.2"
 SCHEMA = 1
 LINUX_TARGETS = (
-    ("ubuntu24.04", "amd64"), ("ubuntu24.04", "arm64"),
-    ("ubuntu25.10", "amd64"), ("ubuntu25.10", "arm64"),
-    ("rhel9", "x86_64"), ("rhel9", "aarch64"),
-    ("rhel10", "x86_64"), ("rhel10", "aarch64"),
+    ("ubuntu24.04", "arm64"),
+    ("ubuntu25.10", "arm64"),
+    ("rhel9", "aarch64"),
+    ("rhel10", "aarch64"),
 )
 
 
@@ -425,7 +425,7 @@ def main():
             cmd.add_argument("--artifact-dir", default="target/package/release")
             scope = cmd.add_mutually_exclusive_group()
             scope.add_argument("--require-macos", action="store_true",
-                               help="require all eight Linux packages plus notarized macOS")
+                               help="require all four arm64/aarch64 Linux packages plus notarized macOS")
             scope.add_argument("--macos-only", action="store_true",
                                help="explicit macOS-only release; require notarized macOS and reject Linux packages")
     args = parser.parse_args()

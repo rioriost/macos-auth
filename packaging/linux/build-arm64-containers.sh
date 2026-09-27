@@ -8,9 +8,17 @@ cd "$repo_root"
 podman_bin=${PODMAN:-podman}
 version=${VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' crates/helper/Cargo.toml | head -n 1)}
 source_ref=${SOURCE_REF:-HEAD}
-out_dir=${OUT_DIR:-target/package/x86_64-containers}
-work_dir=${WORK_DIR:-target/package/x86_64-container-work}
+out_dir=${OUT_DIR:-target/package/arm64-containers}
+work_dir=${WORK_DIR:-target/package/arm64-container-work}
 provenance="$repo_root/packaging/release/artifacts.py"
+
+case "$(uname -m)" in
+  arm64|aarch64) ;;
+  *)
+    echo "This script builds arm64/aarch64 packages and requires an arm64/aarch64 builder." >&2
+    exit 1
+    ;;
+esac
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -31,7 +39,7 @@ run_ubuntu_build() {
   image="$1"
   label="$2"
   src_dir=$(prepare_source "$label")
-  "$podman_bin" run --rm \
+  "$podman_bin" run --rm --platform linux/arm64 \
     -e VERSION="$version" -e OUT_DIR=/out \
     -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src \
     -v "$src_dir:/src:Z" \
@@ -44,7 +52,7 @@ run_rhel_build() {
   image="$1"
   label="$2"
   src_dir=$(prepare_source "$label")
-  "$podman_bin" run --rm \
+  "$podman_bin" run --rm --platform linux/arm64 \
     -e VERSION="$version" -e OUT_DIR=/out \
     -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src \
     -v "$src_dir:/src:Z" \
@@ -59,14 +67,6 @@ require_command tar
 require_command sed
 require_command sha256sum
 require_command python3
-
-case "$(uname -m)" in
-  x86_64|amd64) ;;
-  *)
-    echo "This script builds x86_64/amd64 packages and must run on an x86_64 host." >&2
-    exit 1
-    ;;
-esac
 
 if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
   echo "release builds require a clean committed source tree" >&2

@@ -2,7 +2,9 @@
 
 This document describes how to test `pam_macos_auth.so` without modifying `sudo` first.
 
-Note for Parallels Desktop on Apple Silicon: Linux VMs are expected to be arm64/aarch64. On Debian/Ubuntu arm64, the PAM module directory is usually `/lib/aarch64-linux-gnu/security`, not `/lib/x86_64-linux-gnu/security`.
+Only arm64/aarch64 Linux targets are supported, including Parallels Desktop VMs
+on Apple Silicon. On Debian/Ubuntu arm64, the PAM module directory is usually
+`/lib/aarch64-linux-gnu/security`.
 
 ## Safety rules
 

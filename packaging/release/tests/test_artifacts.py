@@ -88,15 +88,52 @@ class Fixture(unittest.TestCase):
 
 
 class ArtifactTests(Fixture):
-    def test_all_eight_names_are_distinct(self):
+    def test_exact_arm64_release_targets(self):
         names = {artifacts.artifact_name(VERSION, *target) for target in artifacts.LINUX_TARGETS}
-        self.assertEqual(len(names), 8)
-        self.assertIn("macos-auth_0.1.2_ubuntu24.04_arm64.deb", names)
-        self.assertIn("macos-auth_0.1.2_ubuntu25.10_arm64.deb", names)
-        self.assertIn("macos-auth-0.1.2-1.rhel9.aarch64.rpm", names)
-        self.assertIn("macos-auth-0.1.2-1.rhel10.x86_64.rpm", names)
+        self.assertEqual(names, {
+            "macos-auth_0.1.2_ubuntu24.04_arm64.deb",
+            "macos-auth_0.1.2_ubuntu25.10_arm64.deb",
+            "macos-auth-0.1.2-1.rhel9.aarch64.rpm",
+            "macos-auth-0.1.2-1.rhel10.aarch64.rpm",
+        })
         with self.assertRaisesRegex(ValueError, "unsupported"):
-            artifacts.artifact_name(VERSION, "debian12", "amd64")
+            artifacts.artifact_name(VERSION, "debian12", "arm64")
+
+    def test_non_arm64_artifact_names_are_rejected(self):
+        for distro in ("ubuntu24.04", "ubuntu25.10", "rhel9", "rhel10", "darwin"):
+            for arch in ("amd64", "x86_64", "i386", "armv7", "universal"):
+                with self.subTest(distro=distro, arch=arch):
+                    with self.assertRaisesRegex(ValueError, "unsupported target"):
+                        artifacts.artifact_name(
+                            VERSION, distro, arch, "notarized" if distro == "darwin" else "linux")
+
+    def test_legacy_x86_packages_rejected_by_collection_and_verification(self):
+        self.matrix()
+        self.collect()
+        for distro, arch in (("ubuntu24.04", "amd64"), ("ubuntu25.10", "amd64"),
+                             ("rhel9", "x86_64"), ("rhel10", "x86_64")):
+            name = (f"macos-auth_{VERSION}_{distro}_{arch}.deb" if distro.startswith("ubuntu")
+                    else f"macos-auth-{VERSION}-1.{distro}.{arch}.rpm")
+            for directory in (self.builder, self.output):
+                with self.subTest(distro=distro, directory=directory):
+                    package = directory / name
+                    package.write_bytes(b"legacy x86 package fixture")
+                    artifacts.write_record(package, {
+                        "schema_version": 1, "version": VERSION,
+                        "distro": distro, "arch": arch, "state": "linux",
+                        "source": {**SOURCE, "snapshot_sha256": "d" * 64},
+                    })
+                    try:
+                        if directory == self.builder:
+                            with self.assertRaisesRegex(ValueError, "unsupported target"):
+                                self.collect()
+                        else:
+                            with self.assertRaisesRegex(ValueError, "unexpected/mixed artifacts"):
+                                self.verify()
+                    finally:
+                        for path in (package, artifacts.metadata_path(package),
+                                     artifacts.checksum_path(package)):
+                            path.unlink()
 
     def test_native_os_detection(self):
         for package, os_release, expected in (
@@ -121,6 +158,7 @@ class ArtifactTests(Fixture):
             self.assertEqual(artifacts.checksum_path(package).read_bytes(),
                              artifacts.checksum_path(self.output / package.name).read_bytes())
         index = json.loads((self.output / "BUILD-METADATA.txt").read_text())
+        self.assertEqual(len(artifacts.package_files(self.output)), 5)
         self.assertEqual(index["source"]["source_commit"], "a" * 40)
         self.assertEqual(index["collector"]["revision"], "e" * 40)
 
@@ -203,7 +241,7 @@ class ArtifactTests(Fixture):
         with self.assertRaisesRegex(ValueError, "checksums"):
             self.verify()
 
-    def test_all_eight_linux_and_macos_gates_remain_required(self):
+    def test_all_four_linux_and_macos_gates_remain_required(self):
         self.matrix(macos=False)
         self.collect()
         self.verify(require_macos=False)
@@ -296,11 +334,14 @@ class ArtifactTests(Fixture):
         subprocess.run(["sh", str(RELEASE / "make-notes.sh")], env={**env, "RELEASE_SCOPE": "macos-only"},
                        text=True, capture_output=True, check=True)
         self.assertIn("No Linux binary packages are included", notes.read_text())
+        self.assertIn("four-target Linux release gate", notes.read_text())
         self.assertNotIn("ubuntu24.04", notes.read_text())
         subprocess.run(["sh", str(RELEASE / "make-notes.sh")], env={**env, "RELEASE_SCOPE": "full"},
                        text=True, capture_output=True, check=True)
-        self.assertIn("ubuntu24.04_arm64.deb", notes.read_text())
-        self.assertIn("rhel10.x86_64.rpm", notes.read_text())
+        for target in artifacts.LINUX_TARGETS:
+            self.assertIn(artifacts.artifact_name(VERSION, *target), notes.read_text())
+        self.assertNotIn("_amd64.deb", notes.read_text())
+        self.assertNotIn(".x86_64.rpm", notes.read_text())
 
     def test_old_native_basename_is_not_silently_accepted(self):
         package = self.package()
