@@ -149,6 +149,13 @@ the fake-agent subprocess integration uses only fixed development keys and
 disposable fixtures under `agent/`. Actual alert dismissal and OS-provided
 LocalAuthentication behavior still require the manual matrix above.
 
+### Recorded compatibility checks
+
+- [macOS 27.2 beta 2, 2026-09-27](macos-27.2-beta2-compatibility.md):
+  automated checks, builds, cross-language runtime checks, and capability probes
+  passed. Actual Touch ID / Apple Watch approval and OS password fallback remain
+  unverified.
+
 ## Prompt rate limiting
 
 The agent has an in-memory per-host/service/user rate limiter. It is evaluated only after request signature and allowlist verification, and before confirmation UI / LocalAuthentication.
